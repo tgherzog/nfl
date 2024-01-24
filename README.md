@@ -28,7 +28,7 @@ schedule, scores and team information. `NFL.update` provides
 a tool to scrape game scores for a given year from
 <https://www.pro-football-reference.com>. At the moment there
 is no facility to update team information so this
-must be maintainaned manually. I'm not sure what happens
+must be maintained manually. I'm not sure what happens
 to the current schedule if the `update` tool is run mid-way
 through the season, but I can fix that next year ;)
 
@@ -52,9 +52,19 @@ The script can also be loaded as a module interface in the interpreter
 or a script/notebook. Doc strings and help text is available for most methods.
 
 ````
-from nfl import NFL
-nfl = NFL().load()  # defaults to ./NFLData.xlsx
-nfl('NFC')          # return NFC conference standings
+>>> from nfl import NFL
+>>> nfl = NFL().load()  # defaults to ./NFLData.xlsx
+>>> nfl('NFC')          # return NFC conference standings
+NFC
+           div overall                    division                    conference                   
+                   win loss tie       pct      win loss tie       pct        win loss tie       pct
+DAL   NFC-East      12    5   0  0.705882        5    1   0  0.833333          9    3   0  0.750000
+PHI   NFC-East      11    6   0  0.647059        4    2   0  0.666667          7    5   0  0.583333
+NYG   NFC-East       6   11   0  0.352941        3    3   0       0.5          5    7   0  0.416667
+WAS   NFC-East       4   13   0  0.235294        0    6   0       0.0          2   10   0  0.166667
+DET  NFC-North      12    5   0  0.705882        4    2   0  0.666667          8    4   0  0.666667
+GB   NFC-North       9    8   0  0.529412        4    2   0  0.666667          7    5   0  0.583333
+. . .
 ````
 
 You can use the syntax above to return (as objects) information about any
@@ -74,7 +84,7 @@ tiebreaker results like this:
 >>> nfl.tiebreakers(nfl('NFC-South').teams)
 ````
 
-Which (at the end of the 2024 season) returns this multi-index dataframe:
+Which (at the end of the 2023 season) returns this multi-index dataframe:
 
 ````
 team                  TB                           CAR                             NO                           ATL                       
