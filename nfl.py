@@ -392,29 +392,21 @@ class NFL():
 
         for elem in self.games_:
             if wk == elem['wk']:
-                t = False
                 if elem['ht'] in kwargs:
                     elem['hs'] = kwargs[elem['ht']]
-                    t = True
+                    elem['as'] = elem['as'] or (0 if elem['hs'] > 0 else 1)
 
                 if elem['at'] in kwargs:
                     elem['as'] = kwargs[elem['at']]
-                    t = True
-
-                # sanity checks
-                if t:
-                    elem['hs'] = elem['hs'] or 0
-                    elem['as'] = elem['as'] or 0
-                    elem['p'] = True
+                    elem['hs'] = elem['hs'] or (0 if elem['as'] > 0 else 1)
 
             elif wk < elem['wk']:
                 # assuming elements are sorted by week, we can stop at this point
                 break
 
         self.stats = None # signal to rebuild stats
-        return self
 
-    def clear(week, teams=None):
+    def clear(self, week, teams=None):
         '''Clear scores for a given week or weeks
 
         week:   can be an integer, range or list-like. Pass None to clear all (for whatever reason)
@@ -429,7 +421,6 @@ class NFL():
                 elem['hs'] = elem['as'] = None
 
         self.stats = None
-        return self
 
 
     def games(self, teams=None, limit=None, allGames=False):
