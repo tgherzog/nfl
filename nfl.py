@@ -96,13 +96,12 @@ class NFLDivision():
                   if False, sort results by game wlt
         '''
 
-        o = self.host.wlt(self.teams)
-        d = self.host.wlt(self.teams, within=self.teams)
-        z = pd.concat([o, d], keys=['overall', 'division'], axis=1)
+        z = self.host._stats()
+        z = z[z['div']==self.code][['overall','division']]
 
         # use division tiebreakers to calculate precise division rank
         if rank:
-            t = self.host.tiebreakers(self.teams, ascending=True).xs('pct', axis=1, level=1).transpose()
+            t = self.host.tiebreakers(self.teams).xs('pct', axis=1, level=1).transpose()
             t = t.sort_values(list(t.columns), ascending=False)
             t['div_rank'] = range(1, len(t)+1)
             z[('division','rank')] = t['div_rank']
@@ -111,8 +110,8 @@ class NFLDivision():
         return z
 
     def __repr__(self):
-        z = self.host._stats()
-        z = z[z['div']==self.code][['overall','division']]
+        # ensures tiebreakers are used to determine order, then deletes the rank column
+        z = self.standings(True).drop('rank', axis=1, level=1)
         return '{}\n'.format(self.code) + z.__repr__()
 
 class NFLConference():
@@ -139,15 +138,15 @@ class NFLConference():
 
         z = self.host.wlt(self.teams, within=self.teams)
         c = pd.concat([c['overall'], c['division'], z], keys=['overall', 'division', 'conference'], axis=1)
-        c['div'] = c.index.map(lambda x: self.host.teams_[x]['div'].split('-')[1])
+        c.insert(0, 'div', self.host._stats()['div'])
         if rank:
             return c.sort_values(['div', ('division','rank')])
 
         return c.sort_values(['div',('overall','pct')], ascending=[True, False])
 
     def __repr__(self):
-        z = self.host._stats()
-        return '{}\n'.format(self.code) + z[z['conf']==self.code][['div', 'overall', 'division', 'conference']].__repr__()
+        z = self.standings(True)
+        return '{}\n'.format(self.code) + z.drop(('division','rank'), axis=1).__repr__()
 
 class NFL():
 
