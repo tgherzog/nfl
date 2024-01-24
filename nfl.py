@@ -72,14 +72,28 @@ class NFLTeam():
         return self.host.confs_[self.conf]
 
     @property
+    def standings(self):
+        '''Return team standings
+        '''
+
+        return self.host.team_stats(self.code)
+
+    @property
     def schedule(self):
         '''Return the team's schedule
         '''
 
         return self.host.schedule(self.code)
 
+    @property
+    def opponents(self):
+        '''The team's opponents
+        '''
+
+        return self.host.opponents(self.code)
+
     def __repr__(self):
-        return '{}: {} ({})\n'.format(self.code, self.name, self.div) + self.host.team_stats(self.code).__repr__()
+        return '{}: {} ({})\n'.format(self.code, self.name, self.div) + self.standings.__repr__()
 
 
 class NFLDivision():
