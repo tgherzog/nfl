@@ -18,7 +18,8 @@ are:
 * pandas
 * numpy
 
-You may also need to modify the path to your python installation
+You may also need to modify the path to your python installation in the shebang path
+(line 1 of nfl.py).
 
 ## Data Sources & Updates ##
 
