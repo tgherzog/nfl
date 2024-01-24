@@ -66,7 +66,7 @@ nfl('BAL').schedule
 ## Tiebreakers ##
 
 This module's primary purpose is to provide tools to analyze and better
-understand the NFL's tiebreaker rules. For example, you can look at a divisions
+understand the NFL's tiebreaker rules. For example, you can look at a division's
 tiebreaker results like this:
 
 ````
@@ -136,11 +136,12 @@ common-netpoints   36.000000  -9.000000 -36.000000  -77.000000
 overall-netpoints  23.000000  75.000000 -52.000000 -180.000000
 ````
 
-Here, you can see that Tampa Bay wins the tiebreaker by virtue of having a better record than New Orleans in common games.
+Here, you can see that Tampa Bay wins the tiebreaker by virtue of having a better record than New Orleans in common games
+(i.e. games where they played the same opponents).
 
 The table above isn't quite correct because Atlanta and Carolina do not qualify, and therefore should
-be excluded from head-to-head and "common" calculations. That's easily fixed as shown below, although the result turns out
-to be essentially the same:
+be excluded from head-to-head and "common" calculations. That's easily fixed as shown below, although the result
+in this case turns out to be essentially the same:
 
 ````
 >>> nfl.tiebreakers(['TB', 'NO'])
@@ -206,7 +207,7 @@ week team
      PIT   BAL       0  None      None  
 ````
 
-Note that you don't have to know who the opposing teams are; the function will use implicit missing values (either
+Note that you don't have to know who the opposing teams are; the function will use implicit scores if missing (either
 1 or 0) and so long as the tiebreakers don't go all the way down to the "net points" level the outcome will be the same.
 
 
