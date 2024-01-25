@@ -39,7 +39,7 @@ Run ./nfl.py -h for current options. This may expand in the future.
 To update the database using the latest available scores through week 18, run this:
 
 ````
-./nfl.py update NFLData.xlsx 10
+./nfl.py update NFLData.xlsx 18
 ````
 
 At the moment this will clobber any remaining schedule if you enter an earlier week,
