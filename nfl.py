@@ -95,6 +95,9 @@ class NFLTeam():
     def __repr__(self):
         return '{}: {} ({})\n'.format(self.code, self.name, self.div) + self.standings.__repr__()
 
+    def _repr_html_(self):
+        return '<h3>{}: {} ({})</h3>\n'.format(self.code, self.name, self.div) + self.standings._repr_html_()
+
 
 class NFLDivision():
     def __init__(self, code, host):
@@ -125,8 +128,12 @@ class NFLDivision():
 
     def __repr__(self):
         # ensures tiebreakers are used to determine order, then deletes the rank column
-        z = self.standings(True).drop('rank', axis=1, level=1)
+        z = self.standings(True).drop(('division', 'rank'), axis=1)
         return '{}\n'.format(self.code) + z.__repr__()
+
+    def _repr_html_(self):
+        z = self.standings(True).drop(('division', 'rank'), axis=1)
+        return '<h3>{}</h3>\n'.format(self.code) + z._repr_html_()
 
 class NFLConference():
     def __init__(self, code, host):
@@ -159,8 +166,12 @@ class NFLConference():
         return c.sort_values(['div',('overall','pct')], ascending=[True, False])
 
     def __repr__(self):
-        z = self.standings(True)
-        return '{}\n'.format(self.code) + z.drop(('division','rank'), axis=1).__repr__()
+        z = self.standings(True).drop(('division', 'rank'), axis=1)
+        return '{}\n'.format(self.code) + z.__repr__()
+
+    def _repr_html_(self):
+        z = self.standings(True).drop(('division', 'rank'), axis=1)
+        return '<h3>{}</h3>\n'.format(self.code) + z._repr_html_()
 
 class NFL():
 
