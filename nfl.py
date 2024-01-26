@@ -246,7 +246,7 @@ class NFL():
 
         stat_cols = [('name',''),('div',''),('conf','')]
         stat_cols += list(pd.MultiIndex.from_product([['overall','division','conference', 'vic_stren', 'sch_stren'],['win','loss','tie','pct']]))
-        stat_cols += list(pd.MultiIndex.from_product([['misc'],['rank-conf','rank-overall', 'pts-scored', 'pts-allowed']]))
+        stat_cols += list(pd.MultiIndex.from_product([['misc'],['rank-conf','rank-overall', 'pts-scored', 'pts-allowed', 'conf-pts-scored', 'conf-pts-allowed']]))
         stats = pd.DataFrame(columns=pd.MultiIndex.from_tuples(stat_cols))
 
         sched = {k:[] for k in self.teams_.keys()}
@@ -286,9 +286,13 @@ class NFL():
 
                 if self.teams_[game['ht']]['div'] == self.teams_[game['at']]['div']:
                     tally(game['ht'], game['at'], game['hs'], game['as'], 'division')
+
+                if self.teams_[game['ht']]['conf'] == self.teams_[game['at']]['conf']:
                     tally(game['ht'], game['at'], game['hs'], game['as'], 'conference')
-                elif self.teams_[game['ht']]['conf'] == self.teams_[game['at']]['conf']:
-                    tally(game['ht'], game['at'], game['hs'], game['as'], 'conference')
+                    stats.loc[game['ht'], ('misc', 'conf-pts-scored')] += game['hs']
+                    stats.loc[game['at'], ('misc', 'conf-pts-scored')] += game['as']
+                    stats.loc[game['ht'], ('misc', 'conf-pts-allowed')] += game['as']
+                    stats.loc[game['at'], ('misc', 'conf-pts-allowed')] += game['hs']
 
         # strength of victory/schedule
         for (k,row) in stats.iterrows():
@@ -679,7 +683,12 @@ class NFL():
         df.loc['schedule-strength'] = np.nan
         df.loc['conference-rank'] = np.nan
         df.loc['overall-rank'] = np.nan
-        df.loc['common-netpoints'] = np.nan
+
+        if len(divisions) > 1:
+            df.loc['conference-netpoints'] = np.nan
+        else:
+           df.loc['common-netpoints'] = np.nan
+
         df.loc['overall-netpoints'] = np.nan
 
         (h2h,gm) = self.wlt(teams, within=teams, matrix=True)
@@ -697,7 +706,12 @@ class NFL():
 
             df.loc['conference-rank', (team,'pct')] = stats.loc[team, ('misc', 'rank-conf')]
             df.loc['overall-rank', (team,'pct')] = stats.loc[team, ('misc', 'rank-overall')]
-            df.loc['common-netpoints', (team,'pct')] = co.loc[team, 'scored'] - co.loc[team, 'allowed']
+            if 'common-netpoints' in df.index:
+              df.loc['common-netpoints', (team,'pct')] = co.loc[team, 'scored'] - co.loc[team, 'allowed']
+
+            if 'conference-netpoints' in df.index:
+                df.loc['conference-netpoints', (team,'pct')] = stats.loc[team, ('misc', 'conf-pts-scored')] - stats.loc[team, ('misc', 'conf-pts-allowed')]
+
             df.loc['overall-netpoints', (team,'pct')] = stats.loc[team, ('misc', 'pts-scored')] - stats.loc[team, ('misc', 'pts-allowed')]
 
             # sanity checks
