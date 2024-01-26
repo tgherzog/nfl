@@ -580,7 +580,7 @@ class NFL():
         return z
 
 
-    def wlt(self, teams=None, within=None, limit=None, points=False):
+    def wlt(self, teams=None, within=None, limit=None, points=False, matrix=False):
         ''' Return the wlt stats of one or more teams
 
             teams:  team code or list of team codes
@@ -595,11 +595,20 @@ class NFL():
         cols = ['win','loss','tie', 'pct']
         if points:
             cols += ['scored','allowed']
-        df = pd.DataFrame(columns=cols)
+
+        df = pd.DataFrame(index=list(teams), columns=cols)
+        df[df.columns] = 0
         df.columns.name = 'outcome'
         df.index.name = 'team'
+
+        if matrix:
+            # define a matrix of games played against opponents
+            m = pd.DataFrame(index=list(teams), columns=list(teams))
+            m[m.columns] = 0
+            for t in teams:
+                m.loc[t, t] = np.nan
+
         for t,scores in self.scores(teams, limit).items():
-            df.loc[t] = 0
             for score in scores:
                 if within is None or score[3] in within:
                     df.loc[t, score[0]] += 1
@@ -609,8 +618,15 @@ class NFL():
                     if 'allowed' in df:
                         df.loc[t, 'allowed'] += score[2]
 
+                    if matrix and score[3] in m.columns:
+                        m.loc[t, score[3]] += 1
+
         df['pct'] = (df['win'] + df['tie'] * 0.5) / df.drop(columns=['scored','allowed'], errors='ignore').sum(axis=1)
-        return df.sort_values('pct', ascending=False)
+        df.sort_values('pct', ascending=False, inplace=True)
+        if matrix:
+            return (df, m)
+
+        return df
 
     def team_stats(self, team):
         '''Return stats for a single team
@@ -666,7 +682,7 @@ class NFL():
         df.loc['common-netpoints'] = np.nan
         df.loc['overall-netpoints'] = np.nan
 
-        h2h = self.wlt(teams, within=teams)
+        (h2h,gm) = self.wlt(teams, within=teams, matrix=True)
         co  = self.wlt(teams, within=common_opponents, points=True)
 
         for team in teams:
@@ -683,6 +699,20 @@ class NFL():
             df.loc['overall-rank', (team,'pct')] = stats.loc[team, ('misc', 'rank-overall')]
             df.loc['common-netpoints', (team,'pct')] = co.loc[team, 'scored'] - co.loc[team, 'allowed']
             df.loc['overall-netpoints', (team,'pct')] = stats.loc[team, ('misc', 'pts-scored')] - stats.loc[team, ('misc', 'pts-allowed')]
+
+            # sanity checks
+            if not gm.isin([np.nan, gm.iloc[0,1]]).all().all():
+                # all teams must have played each other the same number of games or h2h is invalid
+                df.loc['head-to-head', (team,'pct')] = np.nan
+
+            if len(divisions) > 1 and df.loc['common-games', team].loc['win':'tie'].sum() < 4:
+                # common games in wild-card tiebreakers must be at least 4 games
+                df.loc['common-games', (team,'pct')] = np.nan
+
+        # team-wide sanity checks
+        if (df.loc['common-games'].drop('pct', level=1).groupby('team').sum() < 4).any():
+            # if any team plays less than 4 common games, all common-team record scores are invalid
+            df.loc['common-games'].loc[:, 'pct'] = np.nan
 
         return df
 
