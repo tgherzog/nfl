@@ -714,19 +714,21 @@ class NFL():
 
             df.loc['overall-netpoints', (team,'pct')] = stats.loc[team, ('misc', 'pts-scored')] - stats.loc[team, ('misc', 'pts-allowed')]
 
-            # sanity checks
+            # sanity checks: we use inf to indicate that the column should be ignored
             if not gm.isin([np.nan, gm.iloc[0,1]]).all().all():
                 # all teams must have played each other the same number of games or h2h is invalid
-                df.loc['head-to-head', (team,'pct')] = np.nan
+                df.loc['head-to-head', (team,'pct')] = np.inf
 
-            if len(divisions) > 1 and df.loc['common-games', team].loc['win':'tie'].sum() < 4:
-                # common games in wild-card tiebreakers must be at least 4 games
-                df.loc['common-games', (team,'pct')] = np.nan
 
         # team-wide sanity checks
         if (df.loc['common-games'].drop('pct', level=1).groupby('team').sum() < 4).any():
             # if any team plays less than 4 common games, all common-team record scores are invalid
-            df.loc['common-games'].loc[:, 'pct'] = np.nan
+            df.loc['common-games'].loc[:, 'pct'] = np.inf
+
+        z = df.loc['head-to-head'].loc[:,'pct']
+        if len(divisions) > 1 and len(z) > 2 and not z.isin([0, 1]).any():
+            # wildcard tiebreakers with 3+ teams must be a clean sweep. If there isn't one then set to nan
+            df.loc['head-to-head'].loc[:, 'pct'] = np.inf
 
         return df
 
