@@ -106,7 +106,8 @@ class NFLDivision():
         self.host = host
         self.teams = host.divs_[code]
 
-    def standings(self, rank=False):
+    @property
+    def standings(self):
         ''' Return division standings
 
             rank: if True, add 'rank' column based on in-division tiebreaker rules (longer)
@@ -115,25 +116,14 @@ class NFLDivision():
 
         z = self.host._stats()
         z = z[z['div']==self.code][['overall','division']]
-
-        # use division tiebreakers to calculate precise division rank
-        if rank:
-            t = self.host.tiebreakers(self.teams).xs('pct', axis=1, level=1).transpose()
-            t = t.sort_values(list(t.columns), ascending=False)
-            t['div_rank'] = range(1, len(t)+1)
-            z[('division','rank')] = t['div_rank']
-            return z.sort_values(('division','rank'))
-
         return z
 
     def __repr__(self):
         # ensures tiebreakers are used to determine order, then deletes the rank column
-        z = self.standings(True).drop(('division', 'rank'), axis=1)
-        return '{}\n'.format(self.code) + z.__repr__()
+        return '{}\n'.format(self.code) + self.standings.__repr__()
 
     def _repr_html_(self):
-        z = self.standings(True).drop(('division', 'rank'), axis=1)
-        return '<h3>{}</h3>\n'.format(self.code) + z._repr_html_()
+        return '<h3>{}</h3>\n'.format(self.code) + self.standings._repr_html_()
 
 class NFLConference():
     def __init__(self, code, host):
@@ -147,31 +137,18 @@ class NFLConference():
         return set(map(lambda x: '-'.join([self.code, x]), ['North', 'East', 'South', 'West']))
 
 
-    def standings(self, rank=False):
+    @property
+    def standings(self):
 
-        c = None
-        for elem in self.divisions:
-            z = self.host(elem).standings(rank)
-            if type(c) is pd.DataFrame:
-                c = pd.concat([c, z])
-            else:
-                c = z
-
-        z = self.host.wlt(self.teams, within=self.teams)
-        c = pd.concat([c['overall'], c['division'], z], keys=['overall', 'division', 'conference'], axis=1)
-        c.insert(0, 'div', self.host._stats()['div'])
-        if rank:
-            return c.sort_values(['div', ('division','rank')])
-
-        return c.sort_values(['div',('overall','pct')], ascending=[True, False])
+        z = self.host._stats()
+        z = z[z['conf']==self.code][['div', 'overall','division', 'conference']]
+        return z
 
     def __repr__(self):
-        z = self.standings(True).drop(('division', 'rank'), axis=1)
-        return '{}\n'.format(self.code) + z.__repr__()
+        return '{}\n'.format(self.code) + self.standings.__repr__()
 
     def _repr_html_(self):
-        z = self.standings(True).drop(('division', 'rank'), axis=1)
-        return '<h3>{}</h3>\n'.format(self.code) + z._repr_html_()
+        return '<h3>{}</h3>\n'.format(self.code) + self.standings._repr_html_()
 
 class NFL():
 
@@ -240,13 +217,17 @@ class NFL():
         return self
 
     def _stats(self):
+        '''Return the master statistics table, building it first if necessary. Teams are ordered by conference,
+        division and division rank. Changes to raw game scores (via load, set, etc) invalidate the table
+        so the next call to _stats rebuilds it
+        '''
 
         if self.stats is not None:
             return self.stats
 
         stat_cols = [('name',''),('div',''),('conf','')]
         stat_cols += list(pd.MultiIndex.from_product([['overall','division','conference', 'vic_stren', 'sch_stren'],['win','loss','tie','pct']]))
-        stat_cols += list(pd.MultiIndex.from_product([['misc'],['rank-conf','rank-overall', 'pts-scored', 'pts-allowed', 'conf-pts-scored', 'conf-pts-allowed']]))
+        stat_cols += list(pd.MultiIndex.from_product([['misc'],['rank-conf','rank-overall', 'pts-scored', 'pts-allowed', 'conf-pts-scored', 'conf-pts-allowed', 'div-rank']]))
         stats = pd.DataFrame(columns=pd.MultiIndex.from_tuples(stat_cols))
 
         sched = {k:[] for k in self.teams_.keys()}
@@ -313,8 +294,16 @@ class NFL():
         for i in ['overall','division','conference', 'sch_stren', 'vic_stren']:
             stats[(i,'pct')] = (stats[(i,'win')] + stats[(i,'tie')]*0.5) / stats[i].sum(axis=1)
 
-        stats.sort_values(['div',('overall','pct')], ascending=(True,False), inplace=True)
-        self.stats = stats
+        # sort by division tiebreakers
+        self.stats = stats           # so that tiebreaks doesn't go recursive
+
+        s = pd.Series(index=stats.index)
+        for div in stats['div'].unique():
+            z = self.tiebreaks(div)
+            z[:] = range(len(z))
+            s.loc[z.index] = z.astype(s.dtype)
+
+        self.stats = self.stats.assign(divrank=s).sort_values(['div','divrank']).drop('divrank', axis=1)
         return self.stats
 
 
@@ -650,6 +639,12 @@ class NFL():
         rank (conference or overall) statistics are always in increasing order, e.g. 1 is the worst
         ranked team
 
+        An occurrence of 'inf' as a value indicates that comparisons are not valid for that rule
+        in the given context as per the tiebreakers procedures. The win/loss/tie statistics are still
+        provided for information. For example, if the specified teams do not all have the same number
+        of head-to-head matchups, or a wild-card tiebreaker does not have at least 4 common games, the
+        'pct' column is set to 'inf' for those rules.
+
         Example:
 
         z = nfl.tiebreakers(nfl('NFC-North').teams)
@@ -731,6 +726,94 @@ class NFL():
             df.loc['head-to-head'].loc[:, 'pct'] = np.inf
 
         return df
+
+
+    def tiebreaks(self, teams):
+        '''Returns a series with the results of a robust tiebreaker analysis for teams
+           The series index will be in reverse elimination order, i.e. the winner (last
+           eliminated team) ordered first and the loser (first eliminated team) ordered last.
+           The series value corresponds to the reason each team was eliminated, relative to
+           the team just before it.
+        '''
+        teams = list(self._teams(teams))
+        r = pd.Series()
+        stats = self._stats()
+    
+        if len(teams) == 0:
+            return r
+        
+        def subdiv(teams):
+            '''Returns a dict for the corresponding divisions of the specified teams. Dict
+               keys are division codes and values are arrays of correponding team codes
+            '''
+
+            s = {}
+            for elem in teams:
+                d = self.teams_[elem]['div']
+                if d not in s:
+                    s[d] = []
+
+                s[d].append(elem)
+
+            return s
+
+        def check_until_same(s):
+            '''Returns the number of initial elements with the same value as the next one
+            '''
+
+            if s.isna().all() or (s == np.inf).any():
+                return len(s) - 1
+                
+            i = 0
+            for (k,v) in s.diff(-1).items():
+                if v != 0:
+                    return i
+
+                i += 1
+
+            return len(s)-1
+
+        while len(teams) > 1:
+            z = stats.loc[teams,('overall','pct')].sort_values().copy()
+            t = check_until_same(z)
+            if t == 0:
+                r[z.index[0]] = 'overall'
+                teams.remove(z.index[0])
+            else:
+                # check out many divisions we're about to compare
+                subTeams = list(z.index[0:t+1])
+                divisions = subdiv(subTeams)
+    
+                # may need to eliminate some teams if there are multiple divisions
+                # (first team from each division only)
+                if len(divisions) > 1:
+                    for k,v in divisions.items():
+                        if len(v) > 1:
+                            s = self.tiebreaks(v)
+                            
+                            for t2 in reversed(s.index[1:]):
+                                r[t2] = 'division-tiebreaker:' + s[t2]
+                                teams.remove(t2)
+                                subTeams.remove(t2)                       
+                    
+                z = self.tiebreakers(subTeams).xs('pct', level=1, axis=1).T
+                z = z.sort_values(list(z.columns)).drop(z.columns[0], axis=1)
+                z_len = len(teams)
+                for rule in z.columns:
+                    t = check_until_same(z[rule])
+                    if t == 0:
+                        r[z.index[0]] = rule
+                        teams.remove(z.index[0])
+                        break
+    
+                if z_len == len(teams):
+                    raise NotImplementedError("Can't resolve tiebreaker {}: teams are essentially equal".format(len(r)))
+    
+        # should always be one team left
+        r[teams[0]] = 'winner'
+    
+        # return series in reverse index order (best team first)
+        return r.reindex(r.index[::-1])
 
     @staticmethod
     def result(a, b):
