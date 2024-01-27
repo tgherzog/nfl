@@ -227,8 +227,9 @@ class NFL():
 
         stat_cols = [('name',''),('div',''),('conf','')]
         stat_cols += list(pd.MultiIndex.from_product([['overall','division','conference', 'vic_stren', 'sch_stren'],['win','loss','tie','pct']]))
-        stat_cols += list(pd.MultiIndex.from_product([['misc'],['rank-conf','rank-overall', 'pts-scored', 'pts-allowed', 'conf-pts-scored', 'conf-pts-allowed', 'div-rank']]))
+        stat_cols += list(pd.MultiIndex.from_product([['misc'],['rank-conf','rank-overall', 'pts-scored', 'pts-allowed', 'conf-pts-scored', 'conf-pts-allowed']]))
         stats = pd.DataFrame(columns=pd.MultiIndex.from_tuples(stat_cols))
+        stats.index.name = 'team'
 
         sched = {k:[] for k in self.teams_.keys()}
 
@@ -303,7 +304,7 @@ class NFL():
             z[:] = range(len(z))
             s.loc[z.index] = z.astype(s.dtype)
 
-        self.stats = self.stats.assign(divrank=s).sort_values(['div','divrank']).drop('divrank', axis=1)
+        self.stats = self.stats.assign(divrank=s).sort_values(['div','divrank']).drop('divrank', level=0, axis=1)
         return self.stats
 
 
@@ -572,54 +573,74 @@ class NFL():
         z -= set(teams)
         return z
 
+    def wlt(self, teams=None, within=None, limit=None):
+        '''Return the wlt stats of one or more teams
 
-    def wlt(self, teams=None, within=None, limit=None, points=False, matrix=False):
-        ''' Return the wlt stats of one or more teams
+        teams:  team code or list of team codes
 
-            teams:  team code or list of team codes
+        within: list of team codes that defines the wlt universe
+        '''
 
-            within: list of team codes that defines the wlt universe
+        return self._wlt(teams=teams, within=within, limit=limit)[0].drop(['scored','allowed'], axis=1)
 
-            points: include points scored and allowed
+    def matrix(self, teams=None, limit=None, allGames=False):
+        '''Return a matrix of teams and the number of games played against each other
+        '''
+
+        return self._wlt(teams, limit=limit, allGames=allGames)[1]
+
+
+    def _wlt(self, teams=None, within=None, limit=None, allGames=False):
+        ''' Internal function for calculating wlt from games database with
+        options to calculate ancillary data.
+
+        points: include columns for points scored and allowed
+
+        matrix: if True, returns the wlt frame and the games frame as a tuple
         '''
 
         teams = self._teams(teams)
 
-        cols = ['win','loss','tie', 'pct']
-        if points:
-            cols += ['scored','allowed']
+        cols = ['win','loss','tie', 'pct', 'scored','allowed']
 
         df = pd.DataFrame(index=list(teams), columns=cols)
         df[df.columns] = 0
         df.columns.name = 'outcome'
         df.index.name = 'team'
 
-        if matrix:
-            # define a matrix of games played against opponents
-            m = pd.DataFrame(index=list(teams), columns=list(teams))
-            m[m.columns] = 0
-            for t in teams:
-                m.loc[t, t] = np.nan
+        # define a matrix of games played against opponents
+        m = pd.DataFrame(index=list(teams), columns=list(teams))
+        m[m.columns] = 0
+        for t in teams:
+            m.loc[t, t] = np.nan
 
-        for t,scores in self.scores(teams, limit).items():
-            for score in scores:
-                if within is None or score[3] in within:
-                    df.loc[t, score[0]] += 1
-                    if 'scored' in df:
-                        df.loc[t, 'scored'] += score[1]
+        for game in self.games(teams, limit, allGames):
+            if game['ht'] in teams and (within is None or game['at'] in within):
+                z = NFL.result(game['hs'], game['as'])
+                if z:
+                    df.loc[game['ht'], z] += 1
+                    df.loc[game['ht'], 'scored'] += game['hs']
+                    df.loc[game['ht'], 'allowed'] += game['as']
 
-                    if 'allowed' in df:
-                        df.loc[t, 'allowed'] += score[2]
+                if game['at'] in m.columns:
+                    m.loc[game['ht'], game['at']] += 1
 
-                    if matrix and score[3] in m.columns:
-                        m.loc[t, score[3]] += 1
+            if game['at'] in teams and (within is None or game['ht'] in within):
+                z = NFL.result(game['as'], game['hs'])
+                if z:
+                    df.loc[game['at'], z] += 1
+                    df.loc[game['at'], 'scored'] += game['as']
+                    df.loc[game['at'], 'allowed'] += game['hs']
+
+
+                if game['ht'] in m.columns:
+                    m.loc[game['at'], game['ht']] += 1                
+
 
         df['pct'] = (df['win'] + df['tie'] * 0.5) / df.drop(columns=['scored','allowed'], errors='ignore').sum(axis=1)
         df.sort_values('pct', ascending=False, inplace=True)
-        if matrix:
-            return (df, m)
-
-        return df
+        
+        return (df, m)
 
     def team_stats(self, team):
         '''Return stats for a single team
@@ -686,12 +707,12 @@ class NFL():
 
         df.loc['overall-netpoints'] = np.nan
 
-        (h2h,gm) = self.wlt(teams, within=teams, matrix=True)
-        co  = self.wlt(teams, within=common_opponents, points=True)
+        (h2h,gm) = self._wlt(teams, within=teams)
+        co  = self._wlt(teams, within=common_opponents)[0]
 
         for team in teams:
             df.loc['overall', team] = stats.loc[team,'overall'].values
-            df.loc['head-to-head', team] = h2h.loc[team].values
+            df.loc['head-to-head', team] = h2h.loc[team].drop(['scored', 'allowed']).values
             df.loc['common-games', team] = co.loc[team].drop(['scored','allowed']).values
             df.loc['conference', team] = stats.loc[team,'conference'].values
             df.loc['victory-strength', team] = stats.loc[team,'vic_stren'].values
@@ -736,7 +757,7 @@ class NFL():
            the team just before it.
         '''
         teams = list(self._teams(teams))
-        r = pd.Series()
+        r = pd.Series(name='eliminated-by')
         stats = self._stats()
     
         if len(teams) == 0:
