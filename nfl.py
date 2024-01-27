@@ -153,7 +153,7 @@ class NFLConference():
         champs = self.standings.reset_index().groupby(('div','')).first()['team']
 
         # restructure and reorder by seed
-        champs = pd.Series(champs.index, index=champs)
+        champs = pd.Series(map(lambda x: x.split('-')[-1], champs.index), index=champs, name=self.code)
         champs = champs.reindex(self.host.tiebreaks(champs.index).index)
 
         # pull wildcards from the remaining teams
