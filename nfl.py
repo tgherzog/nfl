@@ -144,6 +144,27 @@ class NFLConference():
         z = z[z['conf']==self.code][['div', 'overall','division', 'conference']]
         return z
 
+
+    def playoffs(self, count=7):
+        '''Return the current conference seeds in order
+        '''
+
+        # get top-listed teams from each division
+        champs = self.standings.reset_index().groupby(('div','')).first()['team']
+
+        # restructure and reorder by seed
+        champs = pd.Series(champs.index, index=champs)
+        champs = champs.reindex(self.host.tiebreaks(champs.index).index)
+
+        # pull wildcards from the remaining teams
+        wc = self.host.tiebreaks(self.teams - set(champs.index))
+        for elem in wc.index[:count-len(champs)]:
+            champs[elem] = 'Wildcard'
+
+        return champs
+
+
+
     def __repr__(self):
         return '{}\n'.format(self.code) + self.standings.__repr__()
 
@@ -741,6 +762,15 @@ class NFL():
             # if any team plays less than 4 common games, all common-team record scores are invalid
             df.loc['common-games'].loc[:, 'pct'] = np.inf
 
+        # A note about how 'clean-sweep' analysis works
+        # The sanity check below ensures that at least one team is a "clean-sweep" either perfectly winning
+        # or losing against the others. If there is no "clean-sweep" (pct=[0,1]) then the rule is skipped
+        #   If there is a clean-sweep loser (pct=0) that team will be dropped from contention by sorting, and the
+        #   procedure restarted with the remaining teams
+        #   If there is a clean-sweep winner, then the lower-ranked teams will still be dropped one-by-one
+        #   as the procedure restarts i.e. a clean-sweep winner in a set of opponents is by definition
+        #   a clean-sweep winner of a subset of opponents
+
         z = df.loc['head-to-head'].loc[:,'pct']
         if len(divisions) > 1 and len(z) > 2 and not z.isin([0, 1]).any():
             # wildcard tiebreakers with 3+ teams must be a clean sweep. If there isn't one then set to nan
@@ -858,6 +888,12 @@ class NFL():
         if type(teams) in [list, set, range]:
             # already a list-like
             return teams
+
+        if type(teams) in [pd.Series, pd.Index]:
+            # a list-like that needs to be cast
+            return list(teams)
+
+        # below here assume a scalar
 
         if teams in self.divs_:
             # division code
