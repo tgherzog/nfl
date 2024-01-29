@@ -425,20 +425,40 @@ class NFL():
             to 0. Scores for bye teams in that week are ignored.
         '''
 
+        if type(wk) is dict:
+            for k,v in wk.items():
+                self.set(k, **v)
+
+            return
+
         # sanity checks
         bogus = set(kwargs.keys()) - set(self.teams_.keys())
         if len(bogus) > 0:
             raise KeyError('Invalid team codes: {}'.format(','.join(bogus)))       
 
+
         for elem in self.games_:
             if wk == elem['wk']:
                 if elem['ht'] in kwargs:
-                    elem['hs'] = kwargs[elem['ht']]
-                    elem['as'] = elem['as'] or (0 if elem['hs'] > 0 else 1)
+                    if kwargs[elem['ht']] < 0:
+                        # tie with unspecified score
+                        elem['hs'] = elem['as'] = 0
+                    else:
+                        elem['hs'] = kwargs[elem['ht']]
+                        if elem['as'] is None:
+                            elem['as'] = 0 if elem['hs'] > 0 else 1
+
+                    elem['p'] = True
 
                 if elem['at'] in kwargs:
-                    elem['as'] = kwargs[elem['at']]
-                    elem['hs'] = elem['hs'] or (0 if elem['as'] > 0 else 1)
+                    if kwargs[elem['at']] < 0:
+                        elem['hs'] = elem['as'] = 0
+                    else:
+                        elem['as'] = kwargs[elem['at']]
+                        if elem['hs'] is None:
+                            elem['hs'] = 0 if elem['as'] > 0 else 1
+
+                    elem['p'] = True
 
             elif wk < elem['wk']:
                 # assuming elements are sorted by week, we can stop at this point
@@ -779,7 +799,7 @@ class NFL():
         return df
 
 
-    def tiebreaks(self, teams):
+    def tiebreaks(self, teams, fast=False):
         '''Returns a series with the results of a robust tiebreaker analysis for teams
            The series index will be in reverse elimination order, i.e. the winner (last
            eliminated team) ordered first and the loser (first eliminated team) ordered last.
@@ -788,10 +808,26 @@ class NFL():
         '''
         teams = list(self._teams(teams))
         r = pd.Series(name='eliminated-by')
-        stats = self._stats()
-    
+
+        # shortcuts for efficiency: implement before call to _stats for speed
         if len(teams) == 0:
             return r
+        elif len(teams) == 1:
+            r[teams[0]] = 'winner'
+            return r
+        elif fast:
+            # if only care about the winner, try to first discern based on overall score
+            if self.stats:
+                z = self.stats.loc[teams,('overall','pct')].sort_values().copy()
+            else:
+                z = self.wlt(teams)
+
+            if z.iloc[0]['pct'] > z.iloc[1]['pct']:
+                r[z.index[0]] = 'winner'
+                return r
+
+
+        stats = self._stats()
         
         def subdiv(teams):
             '''Returns a dict for the corresponding divisions of the specified teams. Dict
@@ -905,6 +941,48 @@ class NFL():
 
         # single team code
         return [teams]
+
+    def scenarios(self, weeks, teams):
+        '''Iterate over all possible game outcomes
+           Returns a generator that produces all possible combinations of winning
+           teams in the specified weeks. Results are a dictionary that can be
+           passed to set
+        '''
+
+        # subroutine based on this:
+        # https://stackoverflow.com/questions/1208118/using-numpy-to-build-an-array-of-all-combinations-of-two-arrays/1235363#1235363
+        def outcomes(arrays, out=None):
+            arrays = [np.asarray(x) for x in arrays]
+            n = np.prod([x.size for x in arrays])
+            if out is None:
+                out = np.zeros([n, len(arrays)], dtype='int')
+
+            z = int(n / arrays[0].size)
+            out[:,0] = np.repeat(arrays[0], z)
+            if arrays[1:]:
+                outcomes(arrays[1:], out=out[0:z, 1:])
+                for j in range(1, arrays[0].size):
+                    out[j*z:(j+1)*z, 1:] = out[0:z, 1:]
+
+            return out
+
+        sch = self.schedule(weeks, teams)
+        for row in outcomes([(1,0,-1)] * len(sch)):
+            sch['hscore'] = row
+            d = {k:{} for k in sch.index.get_level_values(0)}
+            for k,elem in sch.iterrows():
+                d[k[0]][k[1]] = elem['hscore']
+
+            yield d
+
+        for k,row in self.schedule(weeks, teams).iterrows():
+            for i in [0, 1]:
+                scores = {row.index[1]: i, row['at']: 1 - i}
+                
+
+            hscore = i
+            ascore = 1 - i
+
 
 
 if __name__ == '__main__':
