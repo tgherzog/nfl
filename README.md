@@ -49,7 +49,9 @@ and it's unknown what will happen mid-season, so backups are a good idea
 ## Module Interface ##
 
 The script can also be loaded as a module interface in the interpreter
-or a script/notebook. Doc strings and help text is available for most methods.
+or a script/notebook. Doc strings and help text is available for most things.
+There are several jupyter notebooks in this repository that give examples
+of what the module can do. The text below is really just the tip of the iceberg.
 
 ````
 >>> from nfl import NFL
