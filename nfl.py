@@ -497,7 +497,7 @@ class NFL():
         '''
 
         if type(limit) is int:
-            limit = range(1, limit)
+            limit = range(limit, limit+1)
 
         teams = self._teams(teams)
 
@@ -539,49 +539,79 @@ class NFL():
         return z
 
 
-    def schedule(self, which, limit=None):
-        ''' Return schedule for a week or team. Specifying multiple weeks/teams
-            returns a multi-indexed data frame
+    def schedule(self, teams=None, weeks=None, by='team'):
+        ''' Return schedule for a week or team. If a single week and
+        team are requested the result is a Series. If multiple weeks/teams
+        are requested the result is a DataFrame, Multiple weeks and teams
+        together will return a multi-indexed DataFrame.
 
-            which:    a week number, team code or list-like of same.
+        teams:      teams to return: a single team code, division name, conference name or team list
+                    Pass None for all teams
 
-            limit:    a team code, week number or list-like of same (opposite of which)
+        weeks:      week to return or list-like of week numbers
+                    Pass None for all weeks
+
+        by:         Data orientation, either 'team' or 'game'
+                        'game' will return unique games based on the team(s) you request.
+                        If two of the teams you request play each other the result will
+                        be one row not two
+
+                        'team' will return teams as rows; if two requested teams play
+                        each other there will be two rows not one. Additionally, 'bye'
+                        teams will be listed as empty rows
         '''
 
-        limit = self._teams(limit) # turns out this syntax sugarizer works for lists of week numbers too
+        teams2 = self._teams(teams)
+        if type(teams) is str and len(teams2) > 1:
+            # This is so we differentiate between a division/conference name and a team code
+            teams = teams2
 
-        if type(which) is int:
-            df = pd.DataFrame(columns=['at', 'hscore', 'ascore'])
-            df.index.name = 'ht'
-            for game in self.games(teams=limit, limit=range(which,which+1), allGames=True):
-                df.loc[game['ht']] = [game['at'], game['hs'], game['as']]
-        elif type(which) is str:
-            # pre-populate the index so the schedule includes the bye week
-            if limit is None:
-                limit = range(1, self.max_week+1)
+        weeks2 = self._teams(weeks)
 
-            df = pd.DataFrame(columns=['opp', 'at_home', 'score', 'opp_score', 'wlt'], index=limit)
-            df.index.name = 'week'
-            for game in self.games(teams=which, limit=limit, allGames=True):
-                if game['ht'] == which:
-                    df.loc[game['wk']] = [game['at'], 1, game['hs'], game['as'], NFL.result(game['hs'],game['as'])]
+        if by == 'game':
+            df = pd.DataFrame(columns=['week', 'ht', 'at', 'hscore', 'ascore'])
+            for game in self.games(teams=teams2, limit=weeks2, allGames=True):
+                df.loc[len(df)] = [game['wk'], game['ht'], game['at'], game['hs'], game['as']]
+
+            if type(teams) is str and type(weeks) is int:
+                # need a special test here to make sure we have a data frame
+                if len(df) > 0:
+                    return df.drop('week', axis=1).iloc[0]
                 else:
-                    df.loc[game['wk']] = [game['ht'], 0, game['as'], game['hs'], NFL.result(game['as'], game['hs'])]
-        else:
-            # support multiple teams with recursive calls
-            z = {}
-            for elem in which:
-                z[elem] = self.schedule(elem, limit=limit)
+                    # return an empty series
+                    return pd.Series(index=df.columns.drop('week'))
 
-            df = pd.concat(z)
-            if df.index.names[1] == 'week':
-                # ensure result is primarily ordered by week
-                df = df.reorder_levels([1, 0]).sort_index()
-                df.index.names = ['week', 'team']
-            else:
-                df.index.names = ['week', 'ht']
+            elif type(weeks) is int:
+                return df.set_index('ht').drop('week', axis=1)
+
+            return df.set_index(['week', 'ht'])
+
+        if teams2 is None:
+            teams2 = list(self.teams_.keys())
+            teams2.sort()
+
+        # Here we construct the database index in advance so that it includes empty
+        # rows for teams with bye weeks
+        if weeks2 is None:
+            weeks2 = range(1, self.max_week+1)
+
+        df = pd.DataFrame(index=pd.MultiIndex.from_product([weeks2, teams2], names=['week', 'team']), columns=['opp', 'at_home', 'score', 'opp_score', 'wlt'])
+        for game in self.games(teams=teams2, limit=weeks2, allGames=True):
+            if game['ht'] in teams2:
+                df.loc[(game['wk'],game['ht'])] = [game['at'], 1, game['hs'], game['as'], NFL.result(game['hs'], game['as'])]
+            
+            if game['at'] in teams2:
+                df.loc[(game['wk'],game['at'])] = [game['ht'], 0, game['as'], game['hs'], NFL.result(game['as'], game['hs'])]
+
+        if type(teams) is str and type(weeks) is int:
+            return df.loc[(weeks,teams)]
+        elif type(teams) is str:
+            return df.xs(teams, level=1)
+        elif type(weeks) is int:
+            return df.xs(weeks, level=0)
 
         return df
+
 
     def opponents(self, teams, limit=None):
         ''' Returns the set of common opponents of one or more teams
@@ -966,7 +996,7 @@ class NFL():
 
             return out
 
-        sch = self.schedule(weeks, teams)
+        sch = self.schedule(teams, weeks, by='game')
         for row in outcomes([(1,0,-1)] * len(sch)):
             sch['hscore'] = row
             d = {k:{} for k in sch.index.get_level_values(0)}
