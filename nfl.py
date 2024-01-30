@@ -975,15 +975,6 @@ class NFL():
 
             yield d
 
-        for k,row in self.schedule(weeks, teams).iterrows():
-            for i in [0, 1]:
-                scores = {row.index[1]: i, row['at']: 1 - i}
-                
-
-            hscore = i
-            ascore = 1 - i
-
-
 
 if __name__ == '__main__':
     config = docopt(__doc__)
