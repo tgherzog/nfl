@@ -237,6 +237,7 @@ class NFL():
         self.stats = None
         return self
 
+
     def _stats(self):
         '''Return the master statistics table, building it first if necessary. Teams are ordered by conference,
         division and division rank. Changes to raw game scores (via load, set, etc) invalidate the table
@@ -252,57 +253,43 @@ class NFL():
         stats = pd.DataFrame(columns=pd.MultiIndex.from_tuples(stat_cols))
         stats.index.name = 'team'
 
-        sched = {k:[] for k in self.teams_.keys()}
-
-        def tally(hcode, acode, hscore, ascore, cat):
-
-            if hscore > ascore:
-                stats.loc[hcode, (cat,'win')] += 1
-                stats.loc[acode, (cat,'loss')] += 1
-                if cat == 'overall':
-                    sched[hcode] += [(acode,1)]
-                    sched[acode] += [(hcode,0)]
-            elif hscore < ascore:
-                stats.loc[hcode, (cat,'loss')] += 1
-                stats.loc[acode, (cat,'win')] += 1
-                if cat == 'overall':
-                    sched[hcode] += [(acode,0)]
-                    sched[acode] += [(hcode,1)]
-            elif hscore == ascore:
-                stats.loc[hcode, (cat,'tie')] += 1
-                stats.loc[acode, (cat,'tie')] += 1
-                if cat == 'overall':
-                    sched[hcode] += [(acode,0)]
-                    sched[acode] += [(hcode,0)]                   
-
         for k,team in self.teams_.items():
             stats.loc[k, ['name', 'div', 'conf']] = (team['name'], team['div'], team['conf'])
             stats.loc[k, ['overall','division','conference', 'vic_stren', 'sch_stren', 'misc']] = 0
 
+        # special dataframe of game info to streamline processing. Contains 2 rows per game for
+        # outcomes from each team's perspective. Perhaps someday this would be useful elsewhere
+        games = pd.DataFrame(index=range(len(self.games_)*2), columns=['week','team','opp','wlt', 'scored', 'allowed'])
+        z = 0
         for game in self.games_:
             if game['p']:
-                tally(game['ht'], game['at'], game['hs'], game['as'], 'overall')
-                stats.loc[game['ht'], ('misc', 'pts-scored')] += game['hs']
-                stats.loc[game['at'], ('misc', 'pts-scored')] += game['as']
-                stats.loc[game['ht'], ('misc', 'pts-allowed')] += game['as']
-                stats.loc[game['at'], ('misc', 'pts-allowed')] += game['hs']
+                games.loc[z]   = [game['wk'], game['ht'], game['at'], NFL.result(game['hs'], game['as']), game['hs'], game['as']]
+                games.loc[z+1] = [game['wk'], game['at'], game['ht'], NFL.result(game['as'], game['hs']), game['as'], game['hs']]
+                z += 2
 
-                if self.teams_[game['ht']]['div'] == self.teams_[game['at']]['div']:
-                    tally(game['ht'], game['at'], game['hs'], game['as'], 'division')
+        games.dropna(inplace=True)
 
-                if self.teams_[game['ht']]['conf'] == self.teams_[game['at']]['conf']:
-                    tally(game['ht'], game['at'], game['hs'], game['as'], 'conference')
-                    stats.loc[game['ht'], ('misc', 'conf-pts-scored')] += game['hs']
-                    stats.loc[game['at'], ('misc', 'conf-pts-scored')] += game['as']
-                    stats.loc[game['ht'], ('misc', 'conf-pts-allowed')] += game['as']
-                    stats.loc[game['at'], ('misc', 'conf-pts-allowed')] += game['hs']
+        for k,row in games.iterrows():
+            stats.loc[row.team][('overall',row.wlt)] += 1
+            stats.loc[row.team][('misc','pts-scored')] += row.scored
+            stats.loc[row.team][('misc','pts-allowed')] += row.allowed
+            if self.teams_[row.team]['div'] == self.teams_[row.opp]['div']:
+                stats.loc[row.team][('division',row.wlt)] += 1
+
+            if self.teams_[row.team]['conf'] == self.teams_[row.opp]['conf']:
+                stats.loc[row.team][('conference',row.wlt)] += 1
+                stats.loc[row.team][('misc','conf-pts-scored')] += row.scored
+                stats.loc[row.team][('misc','conf-pts-allowed')] += row.allowed
 
         # strength of victory/schedule
         for (k,row) in stats.iterrows():
-            for (op,win) in sched[k]:
-                stats.loc[k, 'sch_stren'] = (stats.loc[k, 'sch_stren'] + stats.loc[op, 'overall']).values
-                if win == 1:
-                    stats.loc[k, 'vic_stren'] = (stats.loc[k, 'vic_stren'] + stats.loc[op, 'overall']).values
+            # calculate strength of schedule and copy
+            t = games[games.team==k]['opp']
+            stats.loc[k]['sch_stren'] = stats.loc[t]['overall'].sum()
+
+            # same for strength of victory
+            t = games[(games.team==k) & (games.wlt=='win')]['opp']
+            stats.loc[k]['vic_stren'] = stats.loc[t]['overall'].sum()
 
         # temporary table for calculating ranks - easier syntax
         t = pd.concat([stats['conf'], stats['misc'][['pts-scored','pts-allowed']]], axis=1)
@@ -325,9 +312,8 @@ class NFL():
             z[:] = range(len(z))
             s.loc[z.index] = z.astype(s.dtype)
 
-        self.stats = self.stats.assign(divrank=s).sort_values(['div','divrank']).drop('divrank', level=0, axis=1)
+        self.stats = stats.assign(divrank=s).sort_values(['div','divrank']).drop('divrank', level=0, axis=1)
         return self.stats
-
 
     def reload(self):
         ''' Reloads the previous Excel file
@@ -847,11 +833,11 @@ class NFL():
             return r
         elif fast:
             # if only care about the winner, try to first discern based on overall score
-            if self.stats:
-                z = self.stats.loc[teams,('overall','pct')].sort_values().copy()
-            else:
+            if self.stats is None:
                 z = self.wlt(teams)
-
+            else:
+                z = self.stats.loc[teams,('overall','pct')].sort_values().copy()
+                
             if z.iloc[0]['pct'] > z.iloc[1]['pct']:
                 r[z.index[0]] = 'winner'
                 return r
