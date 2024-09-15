@@ -301,7 +301,7 @@ class NFL():
         stats[('misc', 'rank-conf')] = t.groupby('conf')['conf-rank'].rank()
 
         for i in ['overall','division','conference', 'sch_stren', 'vic_stren']:
-            stats[(i,'pct')] = (stats[(i,'win')] + stats[(i,'tie')]*0.5) / stats[i].sum(axis=1)
+            stats[(i,'pct')] = (stats[(i,'win')] + stats[(i,'tie')]*0.5) / stats[i].sum(axis=1).replace({0: np.nan})
 
         # sort by division tiebreakers
         self.stats = stats           # so that tiebreaks doesn't go recursive
@@ -324,70 +324,119 @@ class NFL():
 
         return self
 
-    def update(self, path, week, year=None):
+    def build(self, path, year=None):
         ''' Updates the Scores sheet of the specified Excel file by scraping the URL shown in code.
             The file must already exist and have a valid "Divisions" sheet with team names consistent
-            with those on the source website.
+            with those on the source website.  All but the first row of the Scores sheet will be replaced.
 
             path:   path to Excel workbook
-
-            week:   week number (1-based) of last week to load
 
             year:   season to load; else infer the latest season from the current date
         '''
 
         if not year:
             dt = datetime.now()
-            year = dt.year if dt.month >= 8 else dt.year-1
+            year = dt.year if dt.month >= 4 else dt.year-1
 
         self.load(path)
         tids = {v['name']:k for k,v in self.teams_.items()}
         wb = openpyxl.load_workbook(path, read_only=False)
         ws = wb['Scores']
+        ws.delete_rows(2, ws.max_row)
         row = 2
 
-        def safeInt(i):
-            try:
-                i = int(i)
-            except ValueError:
-                pass
+        url = 'https://www.pro-football-reference.com/years/{}/games.htm'.format(year)
+        try:
+            d = PyQuery(url=url)('#all_games #games tbody > tr')
+        except urllib.error.HTTPError as err:
+            logging.error('Bad URL: {}'.format(url))
+            raise
 
-            return i
+        def rowval(elem, id, tag='td'):
+            return PyQuery(elem)('{}[data-stat="{}"]'.format(tag, id)).text()
 
-        for w in range(1, week+1):
-            url = 'https://www.pro-football-reference.com/years/{}/week_{}.htm'.format(year, w)
-            try:
-                time.sleep(1) # avoid throttling
-                d = PyQuery(url=url)('div.game_summaries div.game_summary table.teams')
-            except urllib.error.HTTPError as err:
-                logging.error('Bad URL: {}'.format(url))
-                raise
+        for elem in d:
+            # NB: the tag attributes may be different prior to season start. See prebuild()
+            week = NFL.safeInt(rowval(elem, "week_num", "th"))
+            if type(week) is int:
+                aname  = rowval(elem, "winner")
+                hname  = rowval(elem, "loser")
+                ascore = NFL.safeInt(rowval(elem, "pts_win"))
+                hscore = NFL.safeInt(rowval(elem, "pts_lose"))
 
-            logging.info('Processing {}/{}: ({}) - {} games'.format(w, year, url, len(d)))
-            for elem in d:
-                ateam = PyQuery(PyQuery(elem)('tr:nth-child(2)'))
-                bteam = PyQuery(PyQuery(elem)('tr:nth-child(3)'))
-                (aname,ascore) = (ateam('td:nth-child(1)').text(), ateam('td:nth-child(2)').text())
-                (bname,bscore) = (bteam('td:nth-child(1)').text(), bteam('td:nth-child(2)').text())
+                if rowval(elem, "game_location") != '@':
+                    (aname,hname) = (hname,aname)
+                    (ascore,hscore) = (hscore,ascore)
 
                 try:
                     aname = tids[aname]
-                    bname = tids[bname]
+                    hname = tids[hname]
                 except KeyError as k:
                     logging.error('{}: unrecognized team name: check the Divisions table'.format(k))
                     raise
 
-                ws.cell(row=row, column=1, value=w)
+                ws.cell(row=row, column=1, value=week)
                 ws.cell(row=row, column=2, value=aname)
-                ws.cell(row=row, column=3, value=safeInt(ascore))
-                ws.cell(row=row, column=4, value=bname)
-                ws.cell(row=row, column=5, value=safeInt(bscore))
+                ws.cell(row=row, column=4, value=hname)
+                if type(ascore) is int:
+                    ws.cell(row=row, column=3, value=ascore)
+
+                if type(hscore) is int:
+                    ws.cell(row=row, column=5, value=hscore)
+
                 row += 1
 
-        # empty the remaining cells
-        for row in range(row,ws.max_row):
-            for c in range(1,6):
-                ws.cell(row=row, column=c, value=None)
+        wb.save(path)
+        return self
+
+    def prebuild(self, path, year=None):
+        ''' Deprecated but included for historical reference. Use build() instead.
+
+            Builds the Scores sheet of the specified Excel file by scraping the URL shown in code.
+            The file must already exist and have a valid "Divisions" sheet with team names consistent
+            with those on the source website.  All but the first row of the Scores sheet will be replaced.
+
+            path:   path to Excel workbook
+
+            year:   season to load; else infer the latest season from the current date
+        '''
+
+        if not year:
+            dt = datetime.now()
+            year = dt.year if dt.month >= 4 else dt.year-1
+
+        self.load(path)
+        tids = {v['name']:k for k,v in self.teams_.items()}
+        wb = openpyxl.load_workbook(path, read_only=False)
+        ws = wb['Scores']
+        ws.delete_rows(2, ws.max_row)
+        row = 2
+
+        url = 'https://www.pro-football-reference.com/years/{}/games.htm'.format(year)
+        try:
+            d = PyQuery(url=url)('#all_games #games tbody > tr')
+        except urllib.error.HTTPError as err:
+            logging.error('Bad URL: {}'.format(url))
+            raise
+
+        for elem in d:
+            # FIXME: data-stat attributes will be different as scores are recorded; hence this will only work prior to season start
+            week = NFL.safeInt(PyQuery(PyQuery(elem)('th[data-stat="week_num"]')).text())
+            if type(week) is int:
+                vis  = PyQuery(elem)('td[data-stat="visitor_team"]').text()
+                home = PyQuery(elem)('td[data-stat="home_team"]').text()
+
+                try:
+                    aname = tids[vis]
+                    bname = tids[home]
+                except KeyError as k:
+                    logging.error('{}: unrecognized team name: check the Divisions table'.format(k))
+                    raise
+
+                ws.cell(row=row, column=1, value=week)
+                ws.cell(row=row, column=2, value=aname)
+                ws.cell(row=row, column=4, value=bname)
+                row += 1
 
         wb.save(path)
         return self
@@ -957,6 +1006,15 @@ class NFL():
 
         # single team code
         return [teams]
+
+    @staticmethod
+    def safeInt(i):
+        try:
+            i = int(i)
+        except ValueError:
+            pass
+
+        return i
 
     def scenarios(self, weeks, teams):
         '''Iterate over all possible game outcomes
