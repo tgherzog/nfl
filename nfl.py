@@ -229,7 +229,11 @@ class NFL():
         for row in wb['Scores']:
             if row[0].row > 1 and row[0].value:
                 # at/ht = away team/home team - same for scores
-                game = {'wk': row[0].value, 'at': row[1].value, 'as': row[2].value, 'ht': row[3].value, 'hs': row[4].value}
+                game = {'wk': row[0].value,
+                    'at': row[1].value,
+                    'as': row[2].value if row[2].value is not None else np.nan,
+                    'ht': row[3].value,
+                    'hs': row[4].value if row[4].value is not None else np.nan}
                 game['p'] = game['as'] is not None and game['hs'] is not None
                 self.games_.append(game)
                 self.max_week = max(self.max_week, game['wk'])
@@ -970,7 +974,7 @@ class NFL():
     @staticmethod
     def result(a, b):
         
-        if a is None or b is None:
+        if a is np.nan or b is np.nan:
             return ''
         elif a > b:
             return 'win'
