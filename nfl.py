@@ -1,4 +1,4 @@
-#!/usr/local/bin/python -u
+#!/usr/local/bin/python
 
 """
 NFL stats: a program to calculate NFL team standings
@@ -91,6 +91,113 @@ class NFLTeam():
         '''
 
         return self.host.opponents(self.code)
+
+    def boxscore(self, week):
+        '''Return a dataframe of games stats for the specified week. None is returned for bye weeks
+        '''
+
+        def int_series(s):
+
+            return list(map(lambda x: int(x), s.split('-')))
+
+        def seconds(s):
+            (mins,secs) = map(lambda x: int(x), s.split(':'))
+            return mins*60 + secs
+
+        game = self.host.game(self.code, week)
+        if game and game['p']:
+            ht = game['ht']
+            alt = self.host.teams_[ht]['alt']
+            code = '{}0{}'.format(datetime.strftime(game['ts'], '%Y%m%d'), alt)
+
+            setup = {
+                'head': ['week', 'opp', 'date'],
+                'points': ['q1', 'q2', 'q3', 'q4', 'ot', 'final'],
+                'game': ['yards', '1st_downs', 'turnovers', 'time_of_poss', 'secs_of_poss'],
+                'rushing': ['count', 'yds', 'tds'],
+                'passing': ['comp', 'att', 'yds', 'yds_net', 'tds', 'int'],
+                'fumbles': ['count', 'lost'],
+                'sacks': ['count', 'yds'],
+                '3d_conv': ['count', 'of'],
+                '4d_conv': ['count', 'of'],
+                'penalties': ['count', 'yds'],
+            }
+
+            idx = pd.MultiIndex.from_arrays([
+                list(np.concatenate([[k]*len(v) for k,v in setup.items()])),
+                list(np.concatenate(list(setup.values())))
+                ], names=['cat', 'key'])
+
+            df = pd.DataFrame(index=idx, columns=[game['at'], game['ht']])
+            df.loc[('head','week'), :] = game['wk']
+            df.loc[('head','opp'), :] = [game['ht'], game['at']]
+            df.loc[('head','date'), :] = datetime.strftime(game['ts'], '%Y-%m-%d')
+            
+            url = 'https://www.pro-football-reference.com/boxscores/{}.htm'.format(code)
+            d = PyQuery(url=url)
+
+            t = PyQuery(d)('table.linescore')
+            quarters = [PyQuery(elem).text().lower() for elem in PyQuery(t)('thead th')][2:]
+            ateam    = [PyQuery(elem).text().lower() for elem in PyQuery(t)('tr:nth-child(1) td')][2:]
+            hteam    = [PyQuery(elem).text().lower() for elem in PyQuery(t)('tr:nth-child(2) td')][2:]
+
+            quarters[0:4] = ['q'+x for x in quarters[0:4]]
+            for i in zip(quarters, ateam, hteam):
+                df.loc[('points', i[0]), :] = [int(i[1]), int(i[2])]
+
+            # #team_stats table is commented out, so we have to dig for it
+            html = PyQuery(d)('#all_team_stats').html().replace('<!--', '').replace('-->', '')
+            team_stats = PyQuery(html)('#team_stats')
+
+            for tr in PyQuery(team_stats)('tr'):
+                stat = PyQuery(tr)('th').eq(0).text().lower()
+                at   = PyQuery(tr)('td').eq(0).text().lower()
+                ht   = PyQuery(tr)('td').eq(1).text().lower()
+
+                if stat == 'first downs':
+                    df.loc[('game', '1st_downs'), :] = [int(at), int(ht)]
+                elif stat == 'total yards':
+                    df.loc[('game', 'yards'), :] = [int(at), int(ht)]
+                elif stat == 'turnovers':
+                    df.loc[('game', 'turnovers'), :] = [int(at), int(ht)]
+                elif stat in ['penalties-yards', 'sacked-yards']:
+                    key = 'penalties' if stat == 'penalties-yards' else 'sacks'
+                    at = int_series(at)
+                    ht = int_series(ht)
+                    df.loc[(key,'count'), :] = [at[0], ht[0]]
+                    df.loc[(key,'yds'), :]   = [at[1], ht[1]]
+                elif stat == 'fumbles-lost':
+                    at = int_series(at)
+                    ht = int_series(ht)
+                    df.loc[('fumbles','count'), :] = [at[0], ht[0]]
+                    df.loc[('fumbles','lost'), :]   = [at[1], ht[1]]
+                elif stat == 'rush-yds-tds':
+                    at = int_series(at)
+                    ht = int_series(ht)
+                    df.loc[('rushing','count'), :] = [at[0], ht[0]]
+                    df.loc[('rushing','yds'), :]   = [at[1], ht[1]]
+                    df.loc[('rushing','tds'), :]   = [at[2], ht[2]]
+                elif stat == 'cmp-att-yd-td-int':
+                    at = int_series(at)
+                    ht = int_series(ht)
+                    df.loc[('passing','comp'), :] = [at[0], ht[0]]
+                    df.loc[('passing','att'), :]   = [at[1], ht[1]]
+                    df.loc[('passing','yds'), :]   = [at[2], ht[2]]
+                    df.loc[('passing','tds'), :]   = [at[3], ht[3]]
+                    df.loc[('passing','int'), :]   = [at[4], ht[4]]
+                elif stat == 'net pass yards':
+                    df.loc[('passing', 'yds_net'), :] = [int(at), int(ht)]
+                elif stat == 'time of possession':
+                    df.loc[('game', 'time_of_poss'), :] = [at, ht]
+                    df.loc[('game', 'secs_of_poss'), :] = [seconds(at), seconds(ht)]
+                elif stat in ['third down conv.', 'fourth down conv.']:
+                    key = '3d_conv' if stat == 'third down conv.' else '4d_conv'
+                    at = int_series(at)
+                    ht = int_series(ht)
+                    df.loc[(key,'count'), :] = [at[0], ht[0]]
+                    df.loc[(key,'of'), :]   = [at[1], ht[1]]
+
+            return df
 
     def __repr__(self):
         return '{}: {} ({})\n'.format(self.code, self.name, self.div) + self.standings.__repr__()
@@ -212,9 +319,10 @@ class NFL():
             team = row[0].value
             conf = row[2].value
             div = row[3].value
+            alt = row[4].value
             if team and conf and div:
                 div = '-'.join([conf, div])
-                self.teams_[team] = {'name': row[1].value, 'div': div, 'conf': conf}
+                self.teams_[team] = {'name': row[1].value, 'div': div, 'conf': conf, 'alt': alt}
                 if self.divs_.get(div) is None:
                     self.divs_[div] = set()
 
@@ -233,7 +341,8 @@ class NFL():
                     'at': row[1].value,
                     'as': row[2].value if row[2].value is not None else np.nan,
                     'ht': row[3].value,
-                    'hs': row[4].value if row[4].value is not None else np.nan}
+                    'hs': row[4].value if row[4].value is not None else np.nan,
+                    'ts': row[5].value}
                 game['p'] = game['as'] is not None and game['hs'] is not None
                 self.games_.append(game)
                 self.max_week = max(self.max_week, game['wk'])
@@ -338,18 +447,14 @@ class NFL():
             year:   season to load; else infer the latest season from the current date
         '''
 
-        if not year:
-            dt = datetime.now()
-            year = dt.year if dt.month >= 4 else dt.year-1
-
         self.load(path)
         tids = {v['name']:k for k,v in self.teams_.items()}
         wb = openpyxl.load_workbook(path, read_only=False)
         ws = wb['Scores']
         ws.delete_rows(2, ws.max_row)
         row = 2
+        url = NFL.datasource(year)
 
-        url = 'https://www.pro-football-reference.com/years/{}/games.htm'.format(year)
         try:
             d = PyQuery(url=url)('#all_games #games tbody > tr')
         except urllib.error.HTTPError as err:
@@ -367,6 +472,9 @@ class NFL():
                 hname  = rowval(elem, "loser")
                 ascore = NFL.safeInt(rowval(elem, "pts_win"))
                 hscore = NFL.safeInt(rowval(elem, "pts_lose"))
+                game_date = rowval(elem, "game_date")
+                game_time = rowval(elem, "gametime")
+                game_date = datetime.strptime(game_date+game_time, "%Y-%m-%d%I:%M%p")
 
                 if rowval(elem, "game_location") != '@':
                     (aname,hname) = (hname,aname)
@@ -388,6 +496,7 @@ class NFL():
                 if type(hscore) is int:
                     ws.cell(row=row, column=5, value=hscore)
 
+                ws.cell(row=row, column=6, value=game_date)
                 row += 1
 
         wb.save(path)
@@ -547,6 +656,14 @@ class NFL():
                         yield elem
 
 
+    def game(self, team, week):
+        ''' return a single game for the given team and week 
+        '''
+
+        for elem in self.games(team, week):
+            return elem
+
+
     def scores(self, teams=None, limit=None):
         ''' Returns interated game data structured by teams
 
@@ -634,13 +751,13 @@ class NFL():
         if weeks2 is None:
             weeks2 = range(1, self.max_week+1)
 
-        df = pd.DataFrame(index=pd.MultiIndex.from_product([weeks2, teams2], names=['week', 'team']), columns=['opp', 'at_home', 'score', 'opp_score', 'wlt'])
+        df = pd.DataFrame(index=pd.MultiIndex.from_product([weeks2, teams2], names=['week', 'team']), columns=['opp', 'loc', 'score', 'opp_score', 'wlt'])
         for game in self.games(teams=teams2, limit=weeks2, allGames=True):
             if game['ht'] in teams2:
-                df.loc[(game['wk'],game['ht'])] = [game['at'], 1, game['hs'], game['as'], NFL.result(game['hs'], game['as'])]
+                df.loc[(game['wk'],game['ht'])] = [game['at'], 'home', game['hs'], game['as'], NFL.result(game['hs'], game['as'])]
             
             if game['at'] in teams2:
-                df.loc[(game['wk'],game['at'])] = [game['ht'], 0, game['as'], game['hs'], NFL.result(game['as'], game['hs'])]
+                df.loc[(game['wk'],game['at'])] = [game['ht'], 'away', game['as'], game['hs'], NFL.result(game['as'], game['hs'])]
 
         if type(teams) is str and type(weeks) is int:
             return df.loc[(weeks,teams)]
@@ -982,6 +1099,16 @@ class NFL():
             return 'loss'
 
         return 'tie'
+
+    @staticmethod
+    def datasource(year=None):
+
+        if not year:
+            dt = datetime.now()
+            year = dt.year if dt.month >= 4 else dt.year-1
+
+        return 'https://www.pro-football-reference.com/years/{}/games.htm'.format(year)
+
 
     def _teams(self, teams):
         ''' Transforms teams into an array of actual team codes, or None
