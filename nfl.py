@@ -725,7 +725,7 @@ class NFL():
         weeks2 = self._teams(weeks)
 
         if by == 'game':
-            df = pd.DataFrame(columns=['week', 'ht', 'at', 'hscore', 'ascore'])
+            df = pd.DataFrame(columns=['week', 'hteam', 'ateam', 'hscore', 'ascore'])
             for game in self.games(teams=teams2, limit=weeks2, allGames=True):
                 df.loc[len(df)] = [game['wk'], game['ht'], game['at'], game['hs'], game['as']]
 
@@ -738,9 +738,9 @@ class NFL():
                     return pd.Series(index=df.columns.drop('week'))
 
             elif type(weeks) is int:
-                return df.set_index('ht').drop('week', axis=1)
+                return df.set_index('hteam').drop('week', axis=1)
 
-            return df.set_index(['week', 'ht'])
+            return df.set_index(['week', 'hteam'])
 
         if teams2 is None:
             teams2 = list(self.teams_.keys())
