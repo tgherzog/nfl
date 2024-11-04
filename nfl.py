@@ -84,7 +84,7 @@ class NFLTeam():
         '''Return the team's schedule
         '''
 
-        return self.host.schedule(self.code)
+        return self.host.schedule(self.code, by='team')
 
     @property
     def opponents(self):
@@ -177,9 +177,15 @@ class NFLConference():
         return '<h3>{}</h3>\n'.format(self.code) + self.standings._repr_html_()
 
 class NFL():
+    '''Impelementation class for NFL data operations
+
+       By default calls to scoreboard update the game database in real-time.
+       Set autoUpdate=False to disable
+    '''
 
     year = None
     path = None
+    autoUpdate = True
 
     def __init__(self, year=None, engine=None):
         self.teams_  = {}
@@ -434,7 +440,13 @@ class NFL():
     @property
     def scoreboard(self):
 
-        return self.engine.scoreboard(self)
+        z = self.engine.scoreboard(self)
+        if z and self.autoUpdate:
+            for (k,v) in z.scoreboard.iterrows():
+                if v['status'] == 'Final' or v['status'] == 'Final/OT':
+                    self.set(z.week, **{v['hteam']: v['hscore'], v['ateam']: v['ascore']})
+
+        return z
 
     def set(self, wk, **kwargs):
         ''' Set the final score(s) for games in a given week. You can use this to create
@@ -577,7 +589,7 @@ class NFL():
         return z
 
 
-    def schedule(self, teams=None, weeks=None, by='team'):
+    def schedule(self, teams=None, weeks=None, by='game', ts=False):
         ''' Return schedule for a week or team. If a single week and
         team are requested the result is a Series. If multiple weeks/teams
         are requested the result is a DataFrame, Multiple weeks and teams
@@ -597,7 +609,18 @@ class NFL():
                         'team' will return teams as rows; if two requested teams play
                         each other there will be two rows not one. Additionally, 'bye'
                         teams will be listed as empty rows
+
+        ts:         Return dates as Pandas datetime objects that can be used computationally,
+                    otherwise (default) return an easily read string
+
         '''
+
+        def to_date(obj):
+            obj = pd.to_datetime(obj)
+            if ts:
+                return obj
+
+            return '{}/{} {:02d}:{:02d}'.format(obj.month, obj.day, obj.hour, obj.minute)
 
         teams2 = self._teams(teams)
         if type(teams) is str and len(teams2) > 1:
@@ -609,7 +632,7 @@ class NFL():
         if by == 'game':
             df = pd.DataFrame(columns=['week', 'hteam', 'ateam', 'hscore', 'ascore', 'date'])
             for game in self.games(teams=teams2, limit=weeks2, allGames=True):
-                df.loc[len(df)] = [game['wk'], game['ht'], game['at'], game['hs'], game['as'], pd.to_datetime(game['ts']).date()]
+                df.loc[len(df)] = [game['wk'], game['ht'], game['at'], game['hs'], game['as'], to_date(game['ts'])]
 
             if type(teams) is str and type(weeks) is int:
                 # need a special test here to make sure we have a data frame
@@ -636,10 +659,10 @@ class NFL():
         df = pd.DataFrame(index=pd.MultiIndex.from_product([weeks2, teams2], names=['week', 'team']), columns=['opp', 'loc', 'score', 'opp_score', 'wlt', 'date'])
         for game in self.games(teams=teams2, limit=weeks2, allGames=True):
             if game['ht'] in teams2:
-                df.loc[(game['wk'],game['ht'])] = [game['at'], 'home', game['hs'], game['as'], NFL.result(game['hs'], game['as']), pd.to_datetime(game['ts']).date()]
+                df.loc[(game['wk'],game['ht'])] = [game['at'], 'home', game['hs'], game['as'], NFL.result(game['hs'], game['as']), to_date(game['ts'])]
             
             if game['at'] in teams2:
-                df.loc[(game['wk'],game['at'])] = [game['ht'], 'away', game['as'], game['hs'], NFL.result(game['as'], game['hs']), pd.to_datetime(game['ts']).date()]
+                df.loc[(game['wk'],game['at'])] = [game['ht'], 'away', game['as'], game['hs'], NFL.result(game['as'], game['hs']), to_date(game['ts'])]
 
         if type(teams) is str and type(weeks) is int:
             return df.loc[(weeks,teams)]
@@ -1093,8 +1116,28 @@ if __name__ == '__main__':
         nfl = NFL()
         print(nfl.load(config['--file']).tiebreakers(config['TEAMS']))
 
+class NFLScoreboard():
+    week = None
+    scoreboard = None
+
+    def __init__(self, week, scoreboard):
+        self.week = week
+        self.scoreboard = scoreboard
+
+    def __repr__(self):
+        if type(self.scoreboard) is pd.DataFrame:
+            return self.scoreboard.__repr__()
+
+        return ''
+
+    def _repr_html_(self):
+        if type(self.scoreboard) is pd.DataFrame:
+            return self.scoreboard._repr_html_()
+
+        return ''
 
 class NFLSource():
+    lasturl = None
 
     def boxscore(self, nfl, code, week):
         '''Return box score as a data frame
@@ -1124,6 +1167,7 @@ class NFLSourceProFootballRef(NFLSource):
         def rowval(elem, id, tag='td'):
             return PyQuery(elem)('{}[data-stat="{}"]'.format(tag, id)).text()
 
+        self.lasturl = url
         for elem in d:
             # NB: the tag attributes may be different prior to season start. See prebuild()
             week = NFL.safeInt(rowval(elem, "week_num", "th"))
@@ -1185,6 +1229,7 @@ class NFLSourceProFootballRef(NFLSource):
             
             url = 'https://www.pro-football-reference.com/boxscores/{}.htm'.format(code)
             d = PyQuery(url=url)
+            self.lasturl = url
 
             t = PyQuery(d)('table.linescore')
             quarters = [PyQuery(elem).text().lower() for elem in PyQuery(t)('thead th')][2:]
@@ -1271,7 +1316,8 @@ class NFLSourceESPN(NFLSource):
 
         d = first
         while d <= last:
-            result = requests.get(self.source.format(d.year, d.month)).json()
+            self.lasturl = self.source.format(d.year, d.month)
+            result = requests.get(self.lasturl).json()
             for elem in result['events']:
                 if elem['season']['type'] == season_type:
 
@@ -1311,7 +1357,8 @@ class NFLSourceESPN(NFLSource):
         game = nfl.game(code, week)
         if game and game['p']:
             url = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event={}'
-            result = requests.get(url.format(game['id'])).json()
+            self.lasturl = url.format(game['id'])
+            result = requests.get(self.lasturl).json()
 
             setup = {
                 'head': ['week', 'opp', 'date', 'event'],
@@ -1410,10 +1457,25 @@ class NFLSourceESPN(NFLSource):
         '''Return current scoreboard
         '''
 
-        df = pd.DataFrame(columns=['hteam','ateam','hscore','ascore','period','clock','status','down','gametime','broadcast'])
+        df = pd.DataFrame(columns=['hteam','ateam','hscore','ascore','period','clock','status','down','fpos','broadcast'])
         now = datetime.now()
-        url = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates={:04d}{:02d}{:02d}'
-        result = requests.get(url.format(now.year, now.month, now.day)).json()
+        # url = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates={:04d}{:02d}{:02d}'
+        # self.lasturl = url.format(now.year, now.month, now.day)
+        # result = requests.get(self.lasturl).json()
+        self.lasturl = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard'
+
+        def rget(obj, *argv):
+            '''Safely retrieves values from a nested set of dicts
+            '''
+            if len(argv) == 0:
+                return obj
+
+            if type(obj) is dict:
+                return rget(obj.get(argv[0]), *argv[1:])
+
+            return None
+
+        result = requests.get(self.lasturl).json()
         for elem in result['events']:
             game = elem['competitions'][0]
             (hteam,ateam) = game['competitors']
@@ -1423,23 +1485,33 @@ class NFLSourceESPN(NFLSource):
             at = len(df)
             df.loc[at, ['hteam','ateam']] = [nfl.teamid(hteam['team']['displayName']), nfl.teamid(ateam['team']['displayName'])]
             df.loc[at, ['hscore','ascore']] = [NFL.safeInt(hteam['score']), NFL.safeInt(ateam['score'])]
-            df.loc[at, ['gametime','broadcast']] = [pd.to_datetime(game['date']).astimezone(self.zone).replace(tzinfo=None).time(), game['broadcast']]
+            df.loc[at, ['broadcast','down','fpos','period','clock']] = [game['broadcast'], '','','','']
+            df.loc[at, 'status'] = game['status']['type']['detail'] # default
             status = game['status']['type']['state']
             if status == 'in':
                 df.loc[at, ['period','clock']] = [game['status']['period'], game['status']['displayClock']]
-                if 'situation' in game:
-                    pos = game['situation']['possession']
-                    pos = df.loc[at, 'hteam'] if pos == hteam['id'] else df.loc[at, 'ateam']
-                    df.loc[at, 'status'] = pos
-                    df.loc[at, 'down'] = game['situation']['downDistanceText']
-                else:
-                    df.loc[at, 'status'] = 'live'
-            elif status == 'post':
-                df.loc[at, 'status'] = 'final'
-            else:
-                df.loc[at, 'status'] = status
+                if type(game.get('situation')) is dict:
+                    sit = game['situation']
+                    if sit.get('possession'):
+                        pos = sit['possession']
+                        pos = df.loc[at, 'hteam'] if pos == hteam['id'] else df.loc[at, 'ateam']
+                        df.loc[at, ['status','down','fpos']] = [pos, sit.get('shortDownDistanceText',''), sit.get('possessionText','')]
+                    elif game['status']['type']['name'] == 'STATUS_HALFTIME':
+                        df.loc[at, 'status'] = game['status']['type']['shortDetail']
+                    elif rget(sit, 'lastPlay', 'drive', 'result'):
+                        # between possessions: try to report result of last play
+                        pos = sit['lastPlay']['team']['id']
+                        pos = df.loc[at, 'hteam'] if pos == hteam['id'] else df.loc[at, 'ateam']
+                        df.loc[at, 'status'] = '{} {}'.format(sit['lastPlay']['drive']['result'], pos)
+                    else:
+                        df.loc[at, 'status'] = rget(sit, 'lastPlay', 'type', 'text') or 'na'
 
-        return df
+            elif status == 'pre':
+                df.loc[at, ['hscore','ascore']] = np.nan
+                gametime = pd.to_datetime(game['date']).astimezone(self.zone).replace(tzinfo=None)
+                df.loc[at, 'status'] = '{}/{} {:02d}:{:02d}'.format(gametime.month, gametime.day, gametime.hour, gametime.minute)
+
+        return NFLScoreboard(result['week']['number'], df)
 
 
     def to_datetime(self, date):
