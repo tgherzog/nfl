@@ -449,7 +449,7 @@ class NFL():
     def scoreboard(self):
 
         z = self.engine.scoreboard(self)
-        if z and self.autoUpdate:
+        if z and self.autoUpdate and self.year == z.year:
             for (k,v) in z.scoreboard.iterrows():
                 if v['status'] == 'Final' or v['status'] == 'Final/OT':
                     self.set(z.week, **{v['hteam']: v['hscore'], v['ateam']: v['ascore']})
@@ -525,6 +525,8 @@ class NFL():
         '''Clear scores for a given week or weeks
 
         week:   can be an integer, range or list-like. Pass None to clear all (for whatever reason)
+
+        teams:  limit operation to games for specified teams (list-like)
         '''
 
         if type(week) is int:
@@ -532,8 +534,9 @@ class NFL():
 
         for elem in self.games_:
             if week is None or elem['wk'] in week:
-                elem['p'] = False
-                elem['hs'] = elem['as'] = None
+                if teams is None or elem['ht'] in teams or elem['at'] in teams:
+                    elem['p'] = False
+                    elem['hs'] = elem['as'] = None
 
         self.stats = None
 
@@ -1131,9 +1134,11 @@ if __name__ == '__main__':
 
 class NFLScoreboard():
     week = None
+    year = None
     scoreboard = None
 
-    def __init__(self, week, scoreboard):
+    def __init__(self, year, week, scoreboard):
+        self.year = year
         self.week = week
         self.scoreboard = scoreboard
 
@@ -1524,7 +1529,7 @@ class NFLSourceESPN(NFLSource):
                 gametime = pd.to_datetime(game['date']).astimezone(self.zone).replace(tzinfo=None)
                 df.loc[at, 'status'] = '{}/{} {:02d}:{:02d}'.format(gametime.month, gametime.day, gametime.hour, gametime.minute)
 
-        return NFLScoreboard(result['week']['number'], df)
+        return NFLScoreboard(result['season']['year'], result['week']['number'], df)
 
 
     def to_datetime(self, date):
