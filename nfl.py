@@ -225,14 +225,6 @@ class NFL():
         if i in self.teams_:
             return NFLTeam(i, self)
 
-    def __repr__(self):
-
-        return self.standings.__repr__()
-
-    def _repr_html_(self):
-
-        return self.standings._repr_html()
-
     def load(self, path=None):
         ''' Loads data from the specified excel file
 
@@ -482,6 +474,16 @@ class NFL():
     def standings(self):
 
         return self._stats()[['name','div','overall','division','conference']]
+
+    @property
+    def NFC(self):
+
+        return NFLConference('NFC', self)
+
+    @property
+    def AFC(self):
+
+        return NFLConference('AFC', self)
 
     def set(self, wk, **kwargs):
         ''' Set the final score(s) for games in a given week. You can use this to create
