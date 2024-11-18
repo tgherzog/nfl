@@ -93,15 +93,22 @@ class NFLTeam():
 
         return self.host.opponents(self.code)
 
-    def boxscore(self, week):
+    def boxscore(self, week=None):
+
+        if week is None:
+            week = self.host.week
 
         return self.host.engine.boxscore(self.host, self.code, week)
 
     def __repr__(self):
-        return '{}: {} ({})\n'.format(self.code, self.name, self.div) + self.standings.__repr__()
+        wk = self.host.week or 1
+        s  = self.schedule.loc[range(1,wk+3)].__repr__()
+        return '{}: {} ({})\n'.format(self.code, self.name, self.div) + self.standings.__repr__() + '\n' + s
 
     def _repr_html_(self):
-        return '<h3>{}: {} ({})</h3>\n'.format(self.code, self.name, self.div) + self.standings._repr_html_()
+        wk = self.host.week or 1
+        s  = self.schedule.loc[range(1,wk+3)]._repr_html_()
+        return '<h3>{}: {} ({})</h3>\n'.format(self.code, self.name, self.div) + self.standings._repr_html_() + '\n' + s
 
 
 class NFLDivision():
@@ -119,8 +126,8 @@ class NFLDivision():
                   if False, sort results by game wlt
         '''
 
-        z = self.host._stats()
-        z = z[z['div']==self.code][['overall','division']]
+        z = self.host.standings
+        z = z[z['div']==self.code]
         return z
 
     def __repr__(self):
@@ -145,8 +152,8 @@ class NFLConference():
     @property
     def standings(self):
 
-        z = self.host._stats()
-        z = z[z['conf']==self.code][['div', 'overall','division', 'conference']]
+        z = self.host.standings
+        return z[z['div'].str.startswith(self.code)]
         return z
 
 
@@ -184,6 +191,7 @@ class NFL():
     '''
 
     year = None
+    week = None
     path = None
     autoUpdate = True
 
@@ -270,6 +278,20 @@ class NFL():
         file_year = wb['Meta'].cell(row=3, column=2).value
         if not file_year:
             self.year = file_year
+
+        if not self.week:
+            # assumes games are sorted chronologically, per above
+            now = datetime.now().replace(hour=0, minute=0, second=0)
+            weekends = {}
+            for row in self.games_:
+                t = row['ts'].replace(hour=0, minute=0, second=0)
+                weekends[row['wk']] = max(weekends.get(row['wk'], datetime.min), t)
+                if t <= now:
+                    self.week = row['wk']
+
+            if self.week and self.week < self.max_week and now > weekends[self.week]:
+                # if between weeks, go to the next week
+                self.week += 1
 
         self.stats = None
         return self
@@ -1216,7 +1238,7 @@ class NFLSourceProFootballRef(NFLSource):
         '''
 
         game = nfl.game(code, week)
-        if game and game['p']:
+        if game:
             ht = game['ht']
             alt = nfl.teams_[ht]['alt'] or ht
             code = '{}0{}'.format(datetime.strftime(game['ts'], '%Y%m%d'), alt.lower())
@@ -1244,6 +1266,9 @@ class NFLSourceProFootballRef(NFLSource):
             df.loc[('head','opp'), :] = [game['ht'], game['at']]
             df.loc[('head','date'), :] = datetime.strftime(game['ts'], '%Y-%m-%d')
             df.loc[('head','id'), :] = code
+
+            if not game['p']:
+                return df.dropna()
             
             url = 'https://www.pro-football-reference.com/boxscores/{}.htm'.format(code)
             d = PyQuery(url=url)
@@ -1373,7 +1398,7 @@ class NFLSourceESPN(NFLSource):
             return z
 
         game = nfl.game(code, week)
-        if game and game['p']:
+        if game:
             url = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event={}'
             self.lasturl = url.format(game['id'])
             result = requests.get(self.lasturl).json()
@@ -1400,6 +1425,9 @@ class NFLSourceESPN(NFLSource):
             df.loc[('head','opp'), :] = [game['ht'], game['at']]
             df.loc[('head','date'), :] = datetime.strftime(game['ts'], '%Y-%m-%d')
             df.loc[('head','event'), :] = game['id']
+
+            if not game['p']:
+                return df.dropna()
 
             (hteam,ateam) = result['header']['competitions'][0]['competitors']
             if hteam['homeAway'] != 'home':
