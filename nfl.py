@@ -1505,7 +1505,7 @@ class NFLSourceESPN(NFLSource):
         '''Return current scoreboard
         '''
 
-        df = pd.DataFrame(columns=['hteam','ateam','hscore','ascore','period','clock','status','down','fpos','broadcast'])
+        df = pd.DataFrame(columns=['ateam','hteam','ascore','hscore','period','clock','status','down','fpos','broadcast'])
         now = datetime.now()
         # url = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates={:04d}{:02d}{:02d}'
         # self.lasturl = url.format(now.year, now.month, now.day)
