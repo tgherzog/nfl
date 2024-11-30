@@ -206,8 +206,7 @@ class NFL():
         self.year = year
         self.engine = engine
         if not self.year:
-            dt = datetime.now()
-            self.year = dt.year if dt.month >= 4 else dt.year-1
+            self.year = NFL.current_season()
 
         if not engine:
             self.engine = NFLSourceESPN()
@@ -1099,6 +1098,13 @@ class NFL():
         '''
 
         return list(map(lambda x: int(x), s.split(sep)))
+
+    @staticmethod
+    def current_season():
+        '''Return estimated current season based on the clock
+        '''
+        dt = datetime.now()
+        return dt.year if dt.month >= 4 else dt.year-1
 
     def scenarios(self, weeks, teams):
         '''Iterate over all possible game outcomes
