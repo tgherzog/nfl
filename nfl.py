@@ -36,19 +36,14 @@ Options:
 
 
 import openpyxl
-import pprint
-import requests
 import sys
-import re
 import logging
-import time
 from docopt import docopt
-from pyquery import PyQuery
-import urllib
-from datetime import datetime, timedelta
-from dateutil import tz
+from datetime import datetime
 import numpy as np
 import pandas as pd
+
+from .utils import current_season
 
 class NFLTeam():
     def __init__(self, code, host):
@@ -202,16 +197,17 @@ class NFL():
         self.confs_  = {}
         self.games_  = []
         self.max_week = 0
-        self.stats = pd.DataFrame()
+        self.stats = None
         self.year = year
         self.engine = engine
         if not self.year:
-            self.year = NFL.current_season()
+            self.year = current_season()
 
         if not engine:
+            from .espn import NFLSourceESPN
             self.engine = NFLSourceESPN()
-        elif type(engine) is str:
-            self.engine = getattr(sys.modules[__name__], engine)()
+        # elif type(engine) is str:
+        #     self.engine = getattr(sys.modules[__name__], engine)()
 
     def __call__(self, i):
 
@@ -224,24 +220,49 @@ class NFL():
         if i in self.teams_:
             return NFLTeam(i, self)
 
-    def load(self, path=None):
+    def load(self, path):
         ''' Loads data from the specified excel file
-
-            path:   path to Excel file
         '''
-
-        if not path:
-            path = 'NFLData-{}.xlsx'.format(self.year)
 
         # in case of reload
         self.path   = path
+        self.teams_ = {}
         self.games_ = []
-        self.max_week = 0                  
+        self.max_week = 0
 
         wb = openpyxl.load_workbook(path, read_only=True)
-        self.load_league(wb)
 
-        for row in wb['Scores']:
+        engine = wb['meta'].cell(row=2, column=2).value
+        year   = wb['meta'].cell(row=3, column=2).value
+        if not self.year:
+            self.year = year
+
+        if self.engine.name != engine:
+            self.engine = _engine(engine)
+
+        for row in wb['teams']:
+            key = row[0].value
+            name = row[1].value
+            div = row[2].value
+            conf = div.split('-')[0]
+            if key and name and conf and div:
+                self.teams_[key] = {'name': name, 'conf': conf, 'div': div}
+
+                if self.divs_.get(div) is None:
+                    self.divs_[div] = set()
+
+                if self.confs_.get(conf) is None:
+                    self.confs_[conf] = set()
+
+                self.divs_[div].add(key)
+                self.confs_[conf].add(key)
+
+        self.iteams_ = {v['name']:k for k,v in self.teams_.items()}
+
+        custom_fields = self.engine.extra_fields('games') or []
+        custom_field_offset = 6
+
+        for row in wb['games']:
             if row[0].row > 1 and row[0].value:
                 # at/ht = away team/home team - same for scores
                 game = {'wk': row[0].value,
@@ -249,29 +270,29 @@ class NFL():
                     'as': row[2].value if row[2].value is not None else np.nan,
                     'ht': row[3].value,
                     'hs': row[4].value if row[4].value is not None else np.nan,
-                    'ts': row[5].value,
-                    'id': row[6].value,
+                    'ts': row[5].value
                 }
+
                 game['p'] = game['as'] is not np.nan and game['hs'] is not np.nan
+
+                n = custom_field_offset
+                for x in custom_fields:
+                    game[x] = row[n].value
+                    n += 1
+
                 self.games_.append(game)
                 self.max_week = max(self.max_week, game['wk'])
 
-        # sort games chronologically
-        self.games_ = sorted(self.games_, key=lambda x: x['ts'])
+        # resets and housecleaning
+        self.infer_week()
+        self.stats = None
 
-        # reset the engine
-        my_engine   = self.engine.__class__.__name__
-        file_engine = wb['Meta'].cell(row=2, column=2).value
-        if file_engine and my_engine != file_engine:
-            engine_class = getattr(sys.modules[__name__], file_engine)
-            self.engine = engine_class()
+        return self
 
-        file_year = wb['Meta'].cell(row=3, column=2).value
-        if not file_year:
-            self.year = file_year
 
+    def infer_week(self):
         if not self.week:
-            # assumes games are sorted chronologically, per above
+            # assumes games are sorted chronologically
             now = datetime.now().replace(hour=0, minute=0, second=0)
             weekends = {}
             for row in self.games_:
@@ -284,37 +305,51 @@ class NFL():
                 # if between weeks, go to the next week
                 self.week += 1
 
-        self.stats = None
-        return self
 
-    def load_league(self, wb):
-        '''Loads teams, conferences and divisions from the supplied spreadsheet. Called by load() and build()
+    def save(self, path):
+        '''Save data to the specified Excel file
         '''
 
-        self.teams_ = {}
-        self.divs_  = {}
-        self.confs_ = {}
+        wb = openpyxl.Workbook()
+        wb[wb.sheetnames[0]].title = 'teams'
+        wb.create_sheet('games')
+        wb.create_sheet('meta')
 
-        for row in wb['Divisions']:
-            team = row[0].value
-            conf = row[2].value
-            div = row[3].value
-            alt = row[4].value
-            if team and conf and div:
-                div = '-'.join([conf, div])
-                self.teams_[team] = {'name': row[1].value, 'div': div, 'conf': conf, 'alt': alt}
-                if self.divs_.get(div) is None:
-                    self.divs_[div] = set()
+        ws = wb['teams']
+        row = 1
+        for key,team in self.teams_.items():
+            ws.cell(row=row, column=1).value = key
+            ws.cell(row=row, column=2).value = team['name']
+            ws.cell(row=row, column=3).value = team['div']
+            row += 1
 
-                self.divs_[div].add(team)
+        ws = wb['games']
+        hdr = ['wk', 'at', 'as', 'ht', 'hs', 'ts'] + (self.engine.extra_fields('games') or [])
+        col = 1
+        for elem in hdr:
+            ws.cell(row=1, column=col).value = elem
+            col += 1
 
-                if self.confs_.get(conf) is None:
-                    self.confs_[conf] = set()
+        row = 2
+        for game in self.games_:
+            col = 1
+            for elem in hdr:
+                ws.cell(row=row, column=col).value = game[elem]
+                col += 1
 
-                self.confs_[conf].add(team)
+            row += 1
 
+        ws = wb['meta']
+        ws.cell(row=1, column=1).value = 'Last Updated'
+        ws.cell(row=2, column=1).value = 'Engine'
+        ws.cell(row=3, column=1).value = 'Season'
 
-        self.iteams_ = {v['name']:k for k,v in self.teams_.items()}
+        ws.cell(row=1, column=2).value = datetime.now()
+        ws.cell(row=2, column=2).value = self.engine.name
+        ws.cell(row=3, column=2).value = self.year
+
+        wb.save(path)
+        self.path = path
 
     def teamid(self, name):
         return self.iteams_.get(name)
@@ -405,57 +440,62 @@ class NFL():
 
         return self
 
-    def update(self, path=None):
-        ''' Updates the Scores sheet of the specified Excel file by scraping the URL shown in code.
-            The file must already exist and have a valid "Divisions" sheet with team names consistent
-            with those on the source website.  All but the first row of the Scores sheet will be replaced.
-
-            path:   path to Excel workbook
-
-            year:   season to load; else infer the latest season from the current date
+    def update(self):
+        ''' Updates team and game data from the underlying API
         '''
 
-        if not path:
-            path = 'NFLData-{}.xlsx'.format(self.year)
+        self.teams_ = {}
+        self.divs_  = {}
+        self.confs_ = {}
+        self.games_ = []
+        self.max_week = 0
 
-        wb = openpyxl.load_workbook(path, read_only=False)
-        self.load_league(wb)
-        tids = {v['name']:k for k,v in self.teams_.items()}
-        ws = wb['Scores']
-        ws.delete_rows(2, ws.max_row)
-        row = 2
+        for elem in self.engine.teams(self):
+            key = elem['key']
+            team = {
+                'name': elem['name'],
+                'conf': elem['conf'],
+                'div':  '-'.join([elem['conf'], elem['div']])
+            }
+ 
+            self.teams_[key] = team
 
+            (div,conf) = (team['div'],team['conf'])
+            if self.divs_.get(div) is None:
+                self.divs_[div] = set()
+
+            if self.confs_.get(conf) is None:
+                self.confs_[conf] = set()
+
+            self.divs_[div].add(key)
+            self.confs_[conf].add(key)
+
+        self.iteams_ = {v['name']:k for k,v in self.teams_.items()}
+
+        required_keys = ['week', 'ateam', 'ascore', 'hteam', 'hscore', 'date']
         for elem in self.engine.games(self):
-            hteam = self.teamid(elem['hteam'])
-            ateam = self.teamid(elem['ateam'])
-            if not hteam:
-                raise ValueError('"{}" is not a recognized team name'.format(elem['hteam']))
+            game = {
+                'wk': elem['week'],
+                'at': elem['ateam'],
+                'as': elem['ascore'] if elem['ascore'] is not None else np.nan,
+                'ht': elem['hteam'],
+                'hs': elem['hscore'] if elem['hscore'] is not None else np.nan,
+                'ts': elem['date']
+            }
 
-            if not ateam:
-                raise ValueError('"{}" is not a recognized team name'.format(elem['ateam']))
+            game['p'] = game['hs'] is not np.nan and game['as'] is not np.nan
 
-            ws.cell(row=row, column=1, value=elem['week'])
-            ws.cell(row=row, column=2, value=ateam)
-            ws.cell(row=row, column=4, value=hteam)
-            ws.cell(row=row, column=6, value=elem['date'])
+            for k,v in elem.items():
+                if k not in required_keys:
+                    game[k] = v
 
-            if type(elem['ascore']) is int:
-                ws.cell(row=row, column=3, value=elem['ascore'])
+            self.games_.append(game)
+            self.max_week = max(self.max_week, game['wk'])
 
-            if type(elem['hscore']) is int:
-                ws.cell(row=row, column=5, value=elem['hscore'])
-
-            ws.cell(row=row, column=7, value=elem.get('id'))
-            row += 1
-
-        ws = wb['Meta']
-        ws.cell(row=1, column=2, value=datetime.now())
-        ws.cell(row=2, column=2, value=type(self.engine).__name__)
-        ws.cell(row=3, column=2, value=self.year)
-
-        wb.save(path)
-        wb.close()
-        self.load(path)
+        # resets and housecleaning
+        self.games_ = sorted(self.games_, key=lambda x: x['ts'])
+        self.infer_week()
+        self.stats = None
         return self
 
     @property
@@ -1073,39 +1113,6 @@ class NFL():
         # single team code
         return [teams]
 
-    @staticmethod
-    def safeInt(i):
-        '''Attempt to convert strings to integers without raising exceptions
-        '''
-        try:
-            i = int(i)
-        except ValueError:
-            pass
-
-        return i
-
-    @staticmethod
-    def to_seconds(s):
-        '''Convert "mm:ss" to seconds
-        '''
-
-        (mins,secs) = map(lambda x: int(x), s.split(':'))
-        return mins*60 + secs
-
-    @staticmethod
-    def to_int_list(s, sep='-'):
-        '''Convert hyphenated stats to a list of integers.  "3-8-35" -> [3, 8, 35]
-        '''
-
-        return list(map(lambda x: int(x), s.split(sep)))
-
-    @staticmethod
-    def current_season():
-        '''Return estimated current season based on the clock
-        '''
-        dt = datetime.now()
-        return dt.year if dt.month >= 4 else dt.year-1
-
     def scenarios(self, weeks, teams):
         '''Iterate over all possible game outcomes
            Returns a generator that produces all possible combinations of winning
@@ -1138,6 +1145,15 @@ class NFL():
                 d[k[0]][k[1]] = elem['hscore']
 
             yield d
+
+    @staticmethod
+    def _engine(name):
+        if name == 'ProFootballRef':
+            return NFLSourceProFootballRef()
+        elif name == 'ESPN':
+            return NFLSourceESPN()
+
+        raise ValueError('Unrecognized engine: {}'.format(name))
 
 
 if __name__ == '__main__':
@@ -1183,400 +1199,4 @@ class NFLScoreboard():
             return self.scoreboard._repr_html_()
 
         return ''
-
-class NFLSource():
-    lasturl = None
-
-    def boxscore(self, nfl, code, week):
-        '''Return box score as a data frame
-        '''
-
-        raise NotImplementedError('{} does not implement box scores'.format(self.__class__.__name__))
-
-    def scoreboard(self, nfl):
-
-        raise NotImplementedError('{} does not implement scoreboard'.format(self.__class__.__name__))
-
-
-class NFLSourceProFootballRef(NFLSource):
-
-    source = 'https://www.pro-football-reference.com/years/{}/games.htm'
-
-    def games(self, nfl):
-
-        url = self.source.format(nfl.year)
-
-        try:
-            d = PyQuery(url=url)('#all_games #games tbody > tr')
-        except urllib.error.HTTPError as err:
-            logging.error('Bad URL: {}'.format(url))
-            raise
-
-        def rowval(elem, id, tag='td'):
-            return PyQuery(elem)('{}[data-stat="{}"]'.format(tag, id)).text()
-
-        self.lasturl = url
-        for elem in d:
-            # NB: the tag attributes may be different prior to season start. See prebuild()
-            week = NFL.safeInt(rowval(elem, "week_num", "th"))
-            if type(week) is int:
-                aname  = rowval(elem, "winner")
-                hname  = rowval(elem, "loser")
-                ascore = NFL.safeInt(rowval(elem, "pts_win"))
-                hscore = NFL.safeInt(rowval(elem, "pts_lose"))
-                game_date = rowval(elem, "game_date")
-                game_time = rowval(elem, "gametime")
-                game_date = datetime.strptime(game_date+game_time, "%Y-%m-%d%I:%M%p")
-
-                if rowval(elem, "game_location") != '@':
-                    (aname,hname) = (hname,aname)
-                    (ascore,hscore) = (hscore,ascore)
-
-                yield {
-                    'week': week,
-                    'date': game_date,
-                    'ateam': aname,
-                    'hteam': hname,
-                    'ascore': ascore,
-                    'hscore': hscore,
-                }
-
-    def boxscore(self, nfl, code, week):
-        '''Return a dataframe of games stats for the specified week. None is returned for bye weeks
-        '''
-
-        game = nfl.game(code, week)
-        if game:
-            ht = game['ht']
-            alt = nfl.teams_[ht]['alt'] or ht
-            code = '{}0{}'.format(datetime.strftime(game['ts'], '%Y%m%d'), alt.lower())
-
-            setup = {
-                'head': ['week', 'opp', 'date','id'],
-                'points': ['q1', 'q2', 'q3', 'q4', 'ot', 'final'],
-                'game': ['yards', '1st_downs', 'turnovers', 'time_of_poss', 'secs_of_poss'],
-                'rushing': ['count', 'yds', 'tds'],
-                'passing': ['comp', 'att', 'yds', 'yds_net', 'tds', 'int'],
-                'fumbles': ['count', 'lost'],
-                'sacks': ['count', 'yds_lost'],
-                '3d_conv': ['count', 'of'],
-                '4d_conv': ['count', 'of'],
-                'penalties': ['count', 'yds'],
-            }
-
-            idx = pd.MultiIndex.from_arrays([
-                list(np.concatenate([[k]*len(v) for k,v in setup.items()])),
-                list(np.concatenate(list(setup.values())))
-                ], names=['cat', 'key'])
-
-            df = pd.DataFrame(index=idx, columns=[game['at'], game['ht']])
-            df.loc[('head','week'), :] = game['wk']
-            df.loc[('head','opp'), :] = [game['ht'], game['at']]
-            df.loc[('head','date'), :] = datetime.strftime(game['ts'], '%Y-%m-%d')
-            df.loc[('head','id'), :] = code
-
-            if not game['p']:
-                return df.dropna()
-            
-            url = 'https://www.pro-football-reference.com/boxscores/{}.htm'.format(code)
-            d = PyQuery(url=url)
-            self.lasturl = url
-
-            t = PyQuery(d)('table.linescore')
-            quarters = [PyQuery(elem).text().lower() for elem in PyQuery(t)('thead th')][2:]
-            ateam    = [PyQuery(elem).text().lower() for elem in PyQuery(t)('tr:nth-child(1) td')][2:]
-            hteam    = [PyQuery(elem).text().lower() for elem in PyQuery(t)('tr:nth-child(2) td')][2:]
-
-            quarters[0:4] = ['q'+x for x in quarters[0:4]]
-            for i in zip(quarters, ateam, hteam):
-                df.loc[('points', i[0]), :] = [int(i[1]), int(i[2])]
-
-            # #team_stats table is commented out, so we have to dig for it
-            html = PyQuery(d)('#all_team_stats').html().replace('<!--', '').replace('-->', '')
-            team_stats = PyQuery(html)('#team_stats')
-
-            for tr in PyQuery(team_stats)('tr'):
-                stat = PyQuery(tr)('th').eq(0).text().lower()
-                at   = PyQuery(tr)('td').eq(0).text().lower()
-                ht   = PyQuery(tr)('td').eq(1).text().lower()
-
-                if stat == 'first downs':
-                    df.loc[('game', '1st_downs'), :] = [int(at), int(ht)]
-                elif stat == 'total yards':
-                    df.loc[('game', 'yards'), :] = [int(at), int(ht)]
-                elif stat == 'turnovers':
-                    df.loc[('game', 'turnovers'), :] = [int(at), int(ht)]
-                elif stat == 'penalties-yards':
-                    at = NFL.to_int_list(at)
-                    ht = NFL.to_int_list(ht)
-                    df.loc[('penalties','count'), :] = [at[0], ht[0]]
-                    df.loc[('penalties','yds'), :]   = [at[1], ht[1]]
-                elif stat == 'sacked-yards':
-                    at = NFL.to_int_list(at)
-                    ht = NFL.to_int_list(ht)
-                    df.loc[('sacks','count'), :] = [at[0], ht[0]]
-                    df.loc[('sacks','yds_lost'), :]   = [at[1], ht[1]]
-                elif stat == 'fumbles-lost':
-                    at = NFL.to_int_list(at)
-                    ht = NFL.to_int_list(ht)
-                    df.loc[('fumbles','count'), :] = [at[0], ht[0]]
-                    df.loc[('fumbles','lost'), :]   = [at[1], ht[1]]
-                elif stat == 'rush-yds-tds':
-                    at = NFL.to_int_list(at)
-                    ht = NFL.to_int_list(ht)
-                    df.loc[('rushing','count'), :] = [at[0], ht[0]]
-                    df.loc[('rushing','yds'), :]   = [at[1], ht[1]]
-                    df.loc[('rushing','tds'), :]   = [at[2], ht[2]]
-                elif stat == 'cmp-att-yd-td-int':
-                    at = NFL.to_int_list(at)
-                    ht = NFL.to_int_list(ht)
-                    df.loc[('passing','comp'), :] = [at[0], ht[0]]
-                    df.loc[('passing','att'), :]   = [at[1], ht[1]]
-                    df.loc[('passing','yds'), :]   = [at[2], ht[2]]
-                    df.loc[('passing','tds'), :]   = [at[3], ht[3]]
-                    df.loc[('passing','int'), :]   = [at[4], ht[4]]
-                elif stat == 'net pass yards':
-                    df.loc[('passing', 'yds_net'), :] = [int(at), int(ht)]
-                elif stat == 'time of possession':
-                    df.loc[('game', 'time_of_poss'), :] = [at, ht]
-                    df.loc[('game', 'secs_of_poss'), :] = [NFL.to_seconds(at), NFL.to_seconds(ht)]
-                elif stat in ['third down conv.', 'fourth down conv.']:
-                    key = '3d_conv' if stat == 'third down conv.' else '4d_conv'
-                    at = NFL.to_int_list(at)
-                    ht = NFL.to_int_list(ht)
-                    df.loc[(key,'count'), :] = [at[0], ht[0]]
-                    df.loc[(key,'of'), :]   = [at[1], ht[1]]
-
-            return df
-
-
-
-class NFLSourceESPN(NFLSource):
-
-    source = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates={:04d}{:02d}'
-
-    def __init__(self):
-        self.zone = tz.gettz('America/New_York')
-
-    def games(self, nfl):
-
-        season_type = 2
-        (start,end) = self.season_dates(nfl.year, season_type)
-        first = start.floor(freq='D').replace(day=1)
-        last  = end.floor(freq='D').replace(day=1)
-
-        d = first
-        while d <= last:
-            self.lasturl = self.source.format(d.year, d.month)
-            result = requests.get(self.lasturl).json()
-            for elem in result['events']:
-                if elem['season']['type'] == season_type:
-
-                    (hteam,ateam) = elem['competitions'][0]['competitors']
-                    if hteam['homeAway'] != 'home':
-                        (hteam,ateam) = (ateam,hteam)
-
-                    if elem['competitions'][0]['status']['type']['completed']:
-                        ascore = NFL.safeInt(ateam['score'])
-                        hscore = NFL.safeInt(hteam['score'])
-                    else:
-                        ascore = hscore = None
-
-                    yield {
-                        'week': elem['week']['number'],
-                        'date': self.to_datetime(elem['date']),
-                        'ateam': ateam['team']['displayName'],
-                        'hteam': hteam['team']['displayName'],
-                        'ascore': ascore,
-                        'hscore': hscore,
-                        'id': elem['id']
-                    }
-
-            d += pd.DateOffset(months=1)
-
-    def boxscore(self, nfl, code, week):
-
-        def team_stats(t):
-
-            z = t['team']
-            z['stats'] = {}
-            for elem in t['statistics']:
-                z['stats'][elem['name']] = elem['displayValue']
-
-            return z
-
-        game = nfl.game(code, week)
-        if game:
-            url = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event={}'
-            self.lasturl = url.format(game['id'])
-            result = requests.get(self.lasturl).json()
-
-            setup = {
-                'head': ['week', 'opp', 'date', 'event'],
-                'points': ['q1', 'q2', 'q3', 'q4', 'ot', 'final'],
-                'game': ['drives', 'yards', '1st_downs', 'turnovers', 'fumbles_lost', 'time_of_poss', 'secs_of_poss'],
-                'rushing': ['count', 'yds', 'tds'],
-                'passing': ['comp', 'att', 'yds_net', 'tds', 'int'],
-                'sacks': ['count', 'yds_lost'],
-                '3d_conv': ['count', 'of'],
-                '4d_conv': ['count', 'of'],
-                'penalties': ['count', 'yds'],
-            }
-
-            idx = pd.MultiIndex.from_arrays([
-                list(np.concatenate([[k]*len(v) for k,v in setup.items()])),
-                list(np.concatenate(list(setup.values())))
-                ], names=['cat', 'key'])
-
-            df = pd.DataFrame(index=idx, columns=[game['at'], game['ht']])
-            df.loc[('head','week'), :] = game['wk']
-            df.loc[('head','opp'), :] = [game['ht'], game['at']]
-            df.loc[('head','date'), :] = datetime.strftime(game['ts'], '%Y-%m-%d')
-            df.loc[('head','event'), :] = game['id']
-
-            if not game['p']:
-                return df.dropna()
-
-            (hteam,ateam) = result['header']['competitions'][0]['competitors']
-            if hteam['homeAway'] != 'home':
-                (hteam,ateam) = (ateam,hteam)
-
-            df.loc[('points','final'), :] = [NFL.safeInt(ateam['score']), NFL.safeInt(hteam['score'])]
-
-            qtrs = list(df.index.get_loc_level('points')[1])
-            for i in zip(qtrs, ateam['linescores'], hteam['linescores']):
-                df.loc[('points', i[0]), :] = [NFL.safeInt(i[1]['displayValue']), NFL.safeInt(i[2]['displayValue'])]
-
-            # unpack team statistics into something simpler
-            (hstats,astats) = map(lambda x: x['statistics'], result['boxscore']['teams'])
-            if result['boxscore']['teams'][0]['homeAway'] != 'home':
-                (hstats,astats) = (astats,hstats)
-
-            hstats = {elem['name']: elem['displayValue'] for elem in hstats}
-            astats = {elem['name']: elem['displayValue'] for elem in astats}
-            stats  = {k:[astats.get(k), hstats.get(k)] for k in hstats}
-
-            df.loc[('game','drives'), :] = stats['totalDrives']
-            df.loc[('game','yards'), :] = stats['totalYards']
-            df.loc[('game','1st_downs'), :] = stats['firstDowns']
-            df.loc[('game','turnovers'), :] = stats['turnovers']
-            df.loc[('game', 'fumbles_lost'), :] = stats['fumblesLost']
-            df.loc[('game','time_of_poss'), :] = stats['possessionTime']
-            df.loc[('game','secs_of_poss'), :] = [NFL.to_seconds(stats['possessionTime'][0]), NFL.to_seconds(stats['possessionTime'][1])]
-
-            at = NFL.to_int_list(stats['sacksYardsLost'][0])
-            ht = NFL.to_int_list(stats['sacksYardsLost'][1])
-            df.loc[('sacks','count'), :] = [at[0], ht[0]]
-            df.loc[('sacks','yds_lost'), :]   = [at[1], ht[1]]
-
-            at = NFL.to_int_list(stats['totalPenaltiesYards'][0])
-            ht = NFL.to_int_list(stats['totalPenaltiesYards'][1])
-            df.loc[('penalties','count'), :] = [at[0], ht[0]]
-            df.loc[('penalties','yds'), :]   = [at[1], ht[1]]
-
-            df.loc[('rushing','count'), :] = stats['rushingAttempts']
-            df.loc[('rushing','yds'), :] = stats['rushingYards']
-            df.loc[('rushing','tds'), :] = 0
-
-            at = NFL.to_int_list(stats['completionAttempts'][0], '/')
-            ht = NFL.to_int_list(stats['completionAttempts'][1], '/')
-
-            df.loc[('passing','comp'), :] = [at[0], ht[0]]
-            df.loc[('passing','att'), :] = [at[1], ht[1]]
-            df.loc[('passing','yds_net'), :] = stats['netPassingYards']
-            df.loc[('passing','int'), :] = stats['interceptions']
-            df.loc[('passing','tds'), :] = 0
-
-            at = NFL.to_int_list(stats['thirdDownEff'][0])
-            ht = NFL.to_int_list(stats['thirdDownEff'][1])
-            df.loc[('3d_conv', 'count'), :] = [at[0], ht[0]]
-            df.loc[('3d_conv', 'of'), :] = [at[1], ht[1]]
-
-            at = NFL.to_int_list(stats['fourthDownEff'][0])
-            ht = NFL.to_int_list(stats['fourthDownEff'][1])
-            df.loc[('4d_conv', 'count'), :] = [at[0], ht[0]]
-            df.loc[('4d_conv', 'of'), :] = [at[1], ht[1]]
-
-            # iterate scoringPlays to count touchdowns
-            for score in result['scoringPlays']:
-                key = game['ht'] if score['team']['uid'] == hteam['uid'] else game['at']
-                if score['type']['id'] == '68':
-                    df.loc[('rushing','tds'), key] += 1
-                elif score['type']['id'] == '67':
-                    df.loc[('passing','tds'), key] += 1
-
-            return df
-
-    def scoreboard(self, nfl):
-        '''Return current scoreboard
-        '''
-
-        df = pd.DataFrame(columns=['ateam','hteam','ascore','hscore','period','clock','status','down','fpos','broadcast'])
-        now = datetime.now()
-        # url = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates={:04d}{:02d}{:02d}'
-        # self.lasturl = url.format(now.year, now.month, now.day)
-        # result = requests.get(self.lasturl).json()
-        self.lasturl = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard'
-
-        def rget(obj, *argv):
-            '''Safely retrieves values from a nested set of dicts
-            '''
-            if len(argv) == 0:
-                return obj
-
-            if type(obj) is dict:
-                return rget(obj.get(argv[0]), *argv[1:])
-
-            return None
-
-        result = requests.get(self.lasturl).json()
-        for elem in result['events']:
-            game = elem['competitions'][0]
-            (hteam,ateam) = game['competitors']
-            if hteam['homeAway'] != 'home':
-                (hteam,ateam) = (ateam,hteam)
-
-            at = len(df)
-            df.loc[at, ['hteam','ateam']] = [nfl.teamid(hteam['team']['displayName']), nfl.teamid(ateam['team']['displayName'])]
-            df.loc[at, ['hscore','ascore']] = [NFL.safeInt(hteam['score']), NFL.safeInt(ateam['score'])]
-            df.loc[at, ['broadcast','down','fpos','period','clock']] = [game['broadcast'], '','','','']
-            df.loc[at, 'status'] = game['status']['type']['detail'] # default
-            status = game['status']['type']['state']
-            if status == 'in':
-                df.loc[at, ['period','clock']] = [game['status']['period'], game['status']['displayClock']]
-                if type(game.get('situation')) is dict:
-                    sit = game['situation']
-                    if sit.get('possession'):
-                        pos = sit['possession']
-                        pos = df.loc[at, 'hteam'] if pos == hteam['id'] else df.loc[at, 'ateam']
-                        df.loc[at, ['status','down','fpos']] = [pos, sit.get('shortDownDistanceText',''), sit.get('possessionText','')]
-                    elif game['status']['type']['name'] == 'STATUS_HALFTIME':
-                        df.loc[at, 'status'] = game['status']['type']['shortDetail']
-                    elif rget(sit, 'lastPlay', 'drive', 'result'):
-                        # between possessions: try to report result of last play
-                        pos = sit['lastPlay']['team']['id']
-                        pos = df.loc[at, 'hteam'] if pos == hteam['id'] else df.loc[at, 'ateam']
-                        df.loc[at, 'status'] = '{} {}'.format(sit['lastPlay']['drive']['result'], pos)
-                    else:
-                        df.loc[at, 'status'] = rget(sit, 'lastPlay', 'type', 'text') or 'na'
-
-            elif status == 'pre':
-                df.loc[at, ['hscore','ascore']] = np.nan
-                gametime = pd.to_datetime(game['date']).astimezone(self.zone).replace(tzinfo=None)
-                df.loc[at, 'status'] = '{}/{} {:02d}:{:02d}'.format(gametime.month, gametime.day, gametime.hour, gametime.minute)
-
-        return NFLScoreboard(result['season']['year'], result['week']['number'], df)
-
-
-    def to_datetime(self, date):
-        '''Returns string converted to a zoneless datetime in the current time zone
-        '''
-        return pd.to_datetime(date).to_pydatetime().astimezone(self.zone).replace(tzinfo=None)
-
-    def season_dates(self, year, type=2):
-        '''Returns span for a season (regular season = 2) as pandas datetimes
-        '''
-
-        url = 'https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/seasons/{}/types/{}'.format(year, type)
-        result = requests.get(url).json()
-        return (pd.to_datetime(result['startDate']), pd.to_datetime(result['endDate']))
+        
