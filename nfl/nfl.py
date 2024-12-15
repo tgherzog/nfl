@@ -1,40 +1,5 @@
 #!/usr/local/bin/python
 
-"""
-NFL stats: a program to calculate NFL team standings
-
-Script is now designed as a module. To get started, use the command line options or load
-interactively and try:
-
-from nfl import NFL
-nfl = NFL()
-nfl.load('NFLData.xlsx')
-
-nfl('MIN')                       # info and standings for vikings
-nfl('NFC')                       # or the NFC conference
-nfl.wlt(['MIN', 'GB'])           # win/loss/tie info
-nfl.tiebreakers(['DAL', 'PHI'])  # tiebreaker calculations
-
-# and lots more, and yet lots of room for enhancements/improvements ;)
-
-Usage:
-    nfl.py update FILE WEEK
-    nfl.py team TEAM [--file FILE]
-    nfl.py tiebreakers TEAMS... [--file FILE]
-
-Commands:
-    update          Update the database FILE, scraping data up to and including WEEK
-
-    team            Report TEAM stats and schedule (division or conference work too)
-
-    tiebreakers     Report tiebreaker analysis for the specified TEAMS
-
-Options:
-    --file FILE     Use FILE as database path [default: NFLData.xlsx]
-
-"""
-
-
 import openpyxl
 import sys
 import logging
@@ -46,6 +11,19 @@ import pandas as pd
 from .utils import current_season
 
 class NFLTeam():
+    '''an NFL team, typically obtained by calling the NFL object with the team code
+
+       Local variables you can use (but not change)
+
+       code: team code: identifies the team in API calls
+
+       name: team name
+
+       div:  division code
+
+       conf: conference code
+    '''
+
     def __init__(self, code, host):
 
         elem = host.teams_[code]
@@ -57,38 +35,41 @@ class NFLTeam():
 
     @property
     def division(self):
-        '''Return set of teams in this team's division
+        '''Set of teams in this team's division
         '''
         return self.host.divs_[self.div]
 
     @property
     def conference(self):
-        '''Return set of teams in this team's conference
+        '''Set of teams in this team's conference
         '''
         return self.host.confs_[self.conf]
 
     @property
     def standings(self):
-        '''Return team standings
+        '''Team standings
         '''
 
         return self.host.team_stats(self.code)
 
     @property
     def schedule(self):
-        '''Return the team's schedule
+        '''Team schedule
         '''
 
         return self.host.schedule(self.code, by='team')
 
     @property
     def opponents(self):
-        '''The team's opponents
+        '''Team opponents (from its schedule)
         '''
 
         return self.host.opponents(self.code)
 
     def boxscore(self, week=None):
+        '''Boxscore stats for the game played in the specified week. If week=None
+           return the current week from the nfl object
+        '''
 
         if week is None:
             week = self.host.week
@@ -103,7 +84,7 @@ class NFLTeam():
     def _repr_html_(self):
         wk = self.host.week or 1
         s  = self.schedule.loc[range(1,wk+3)]._repr_html_()
-        return '<h3>{}: {} ({})</h3>\n'.format(self.code, self.name, self.div) + self.standings._repr_html_() + '\n' + s
+        return '<h4>{}: {} ({})</h4>\n'.format(self.code, self.name, self.div) + self.standings._repr_html_() + '\n' + s
 
 
 class NFLDivision():
@@ -115,10 +96,7 @@ class NFLDivision():
 
     @property
     def standings(self):
-        ''' Return division standings
-
-            rank: if True, add 'rank' column based on in-division tiebreaker rules (longer)
-                  if False, sort results by game wlt
+        '''Division standings
         '''
 
         z = self.host.standings
@@ -146,6 +124,8 @@ class NFLConference():
 
     @property
     def standings(self):
+        '''Conference standings
+        '''
 
         z = self.host.standings
         return z[z['div'].str.startswith(self.code)]
@@ -153,7 +133,7 @@ class NFLConference():
 
 
     def playoffs(self, count=7):
-        '''Return the current conference seeds in order
+        '''Current conference seeds in order
         '''
 
         # get top-listed teams from each division
@@ -293,10 +273,10 @@ class NFL():
     def infer_week(self):
         if not self.week:
             # assumes games are sorted chronologically
-            now = datetime.now().replace(hour=0, minute=0, second=0)
+            now = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
             weekends = {}
             for row in self.games_:
-                t = row['ts'].replace(hour=0, minute=0, second=0)
+                t = row['ts'].replace(hour=0, minute=0, second=0, microsecond=0)
                 weekends[row['wk']] = max(weekends.get(row['wk'], datetime.min), t)
                 if t <= now:
                     self.week = row['wk']
@@ -674,8 +654,11 @@ class NFL():
         are requested the result is a DataFrame, Multiple weeks and teams
         together will return a multi-indexed DataFrame.
 
-        teams:      teams to return: a single team code, division name, conference name or team list
-                    Pass None for all teams
+        teams:      teams to return. This can be:
+                       A single team code, e.g., 'MIN'
+                       A list-like of team codes: ['MIN', 'PHI']
+                       A division name: 'NFC-North''
+                       A conference: 'NFC'
 
         weeks:      week to return or list-like of week numbers
                     Pass None for all weeks
@@ -686,11 +669,22 @@ class NFL():
                         be one row not two
 
                         'team' will return teams as rows; if two requested teams play
-                        each other there will be two rows not one. Additionally, 'bye'
-                        teams will be listed as empty rows
+                        each other there will be two rows not one, with inverse 'home'
+                        and 'away' designations. Additionally, 'bye' teams will be listed as empty rows
 
         ts:         Return dates as Pandas datetime objects that can be used computationally,
                     otherwise (default) return an easily read string
+
+        As a convenience, you can also pass an integer as the first argument to get the schedule
+        for the specified week. The following two calls are the same:
+
+        schedule(5)
+        schedule(teams=None, weeks=5)
+
+        Examples
+          nfl.schedule('MIN', by='team')   # Vikings schedule
+          nfl.schedule(weeks=range(3,8))   # schedule for weeks 3-6
+          nfl.schedule(5)                  # shortcut for week 5: single ints are taken as a week number not a team
 
         '''
 
@@ -701,10 +695,15 @@ class NFL():
 
             return '{}/{} {:02d}:{:02d}'.format(obj.month, obj.day, obj.hour, obj.minute)
 
-        teams2 = self._teams(teams)
-        if type(teams) is str and len(teams2) > 1:
-            # This is so we differentiate between a division/conference name and a team code
-            teams = teams2
+        if type(teams) is int and weeks is None:
+            # special sugar: interpret first argument as a single week
+            weeks = teams
+            teams = teams2 = None
+        else:
+            teams2 = self._teams(teams)
+            if type(teams) is str and len(teams2) > 1:
+                # This is so we differentiate between a division/conference name and a team code
+                teams = teams2
 
         weeks2 = self._teams(weeks)
 
@@ -1156,28 +1155,6 @@ class NFL():
         raise ValueError('Unrecognized engine: {}'.format(name))
 
 
-if __name__ == '__main__':
-    config = docopt(__doc__)
-    # print(config)
-    # sys.exit(0)
-
-    if config['update']:
-        logging.basicConfig(level=logging.INFO)
-
-        NFL().update(config['FILE'], week=int(config['WEEK']))
-
-    if config['team']:
-        nfl = NFL()
-        nfl.load(config['--file'])
-        team = nfl(config['TEAM'])
-        print(team)
-        if type(team) is NFLTeam:
-            print(team.schedule)
-
-    if config['tiebreakers']:
-        nfl = NFL()
-        print(nfl.load(config['--file']).tiebreakers(config['TEAMS']))
-
 class NFLScoreboard():
     week = None
     year = None
@@ -1190,13 +1167,13 @@ class NFLScoreboard():
 
     def __repr__(self):
         if type(self.scoreboard) is pd.DataFrame:
-            return self.scoreboard.__repr__()
+            return 'Week {}\n'.format(self.week) + self.scoreboard.__repr__()
 
         return ''
 
     def _repr_html_(self):
         if type(self.scoreboard) is pd.DataFrame:
-            return self.scoreboard._repr_html_()
+            return '<h3>Week {}</h3>\n'.format(self.week) + self.scoreboard._repr_html_()
 
         return ''
         
