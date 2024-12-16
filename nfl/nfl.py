@@ -66,6 +66,12 @@ class NFLTeam():
 
         return self.host.opponents(self.code)
 
+    @property
+    def roster(self):
+        '''Team roster
+        '''
+        return self.host.roster(self.code)
+
     def boxscore(self, week=None):
         '''Boxscore stats for the game played in the specified week. If week=None
            return the current week from the nfl object
@@ -783,6 +789,14 @@ class NFL():
         z -= set(teams)
         return z
 
+    def roster(self, team):
+        '''Return team roster
+
+        team: team code
+        '''
+
+        return self.engine.roster(self, team)
+
     def wlt(self, teams=None, within=None, limit=None):
         '''Return the wlt stats of one or more teams
 
@@ -1177,3 +1191,77 @@ class NFLScoreboard():
 
         return ''
         
+class NFLRoster():
+    '''Contains a team roster
+    '''
+
+    def __init__(self, roster):
+        self.roster = roster
+
+    def __getattr__(self, key):
+        '''Returns the portion of the roster for the side with the specified property name
+        Examples:
+        min = nfl('MIN').roster
+        min.SPEC
+        '''
+
+        df = self.roster[self.roster['side']==key]
+        if len(df) == 0:
+            sides = '{' + ' '.join(self.sides) + '}'
+            raise AttributeError('property must be one of {}'.format(sides))
+
+        return df
+
+    def __getitem__(self, key):
+        '''If an int is passed, returns the player with that jersey number.
+        If a str is passed, returns the portion of the roster for the given position code
+        '''
+
+        if type(key) is int:
+            df = self.roster[self.roster['jersey']==str(key)]
+            if len(df) > 0:
+                return df.iloc[0].rename('player')
+
+            return None
+
+        df = self.roster[self.roster['pos']==key]
+        if len(df) == 0:
+            positions = '{' + ' '.join(self.positions) + '}'
+            raise KeyError('key must be one of {}'.format(positions))
+
+        return df
+
+    @property
+    def coach(self):
+        '''Team's coach
+        '''
+        return self.member('COACH')
+
+    @property
+    def quarterback(self):
+        '''Starting quarterback (i.e. 1st quarterback in roster)
+        '''
+        return self.member('QB')
+
+    @property
+    def positions(self):
+        '''List of position codes in the roster
+        '''
+
+        return set(self.roster['pos'].unique())
+
+    @property
+    def sides(self):
+        '''List of side codes in the roster (i.e. valid properties)
+        '''
+
+        return set(self.roster['side'].unique())
+
+    def member(self, code):
+        '''Name and jersey for the 1st roster member with the given code
+        '''
+        row = self[code].iloc[0]
+        if row['jersey'] is np.nan:
+            return row['name']
+        
+        return '{} ({})'.format(row['name'], row['jersey'])

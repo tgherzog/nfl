@@ -14,6 +14,12 @@ class NFLSource():
 
         raise NotImplementedError('{} does not implement scoreboard'.format(self.__class__.__name__))
 
+    def roster(self, nfl, code):
+        '''Return team roster as a data frame
+        '''
+
+        raise NotImplementedError('{} does not implement team rosters'.format(self.__class__.__name__))
+
     def extra_fields(self, type):
         '''Return extra field names requested by this source
         '''

@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from .source import NFLSource
-from .nfl import NFLScoreboard
+from .nfl import NFLScoreboard, NFLRoster
 from .utils import safeInt, to_seconds, to_int_list, current_season
 
 class NFLSourceESPN(NFLSource):
@@ -284,6 +284,24 @@ class NFLSourceESPN(NFLSource):
 
         return NFLScoreboard(result['season']['year'], result['week']['number'], df)
 
+
+    def roster(self, nfl, code):
+        '''Return team roster
+        '''
+
+        url = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams/{}/roster'
+        df = pd.DataFrame(columns=['side', 'pos', 'position', 'name', 'jersey'])
+        sides = {'offense': '1:OFF', 'defense': '2:DEF', 'specialTeam': '3:SPEC', 'injuredReserveOrOut': '4:INJURED'}
+        results = requests.get(url.format(code)).json()
+
+        df.loc[len(df)] = ['0:COACH', 'COACH', 'Coach', '{} {}'.format(results['coach'][0]['firstName'], results['coach'][0]['lastName']), np.nan]
+        for side in results['athletes']:
+            if sides.get(side['position']):
+                for elem in side['items']:
+                    df.loc[len(df)] = [sides[side['position']], elem['position']['abbreviation'], elem['position']['name'], elem['fullName'], elem['jersey'] or np.nan]
+
+        df.sort_values(['side', 'position'], inplace=True)
+        return NFLRoster(df.replace({'side': r'.+:(.+)'}, {'side': r'\1'}, regex=True))
 
     def to_datetime(self, date):
         '''Returns string converted to a zoneless datetime in the current time zone
