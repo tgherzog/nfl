@@ -3,6 +3,7 @@
 import openpyxl
 import sys
 import logging
+import copy
 from docopt import docopt
 from datetime import datetime
 import numpy as np
@@ -186,6 +187,7 @@ class NFL():
         self.stats = None
         self.year = year
         self.engine = engine
+        self.stash_ = None
         if not self.year:
             self.year = current_season()
 
@@ -417,14 +419,23 @@ class NFL():
         self.stats = stats.assign(divrank=s).sort_values(['div','divrank']).drop('divrank', level=0, axis=1)
         return self.stats
 
-    def reload(self):
-        ''' Reloads the previous Excel file
+    def stash(self):
+        '''Saves a copy of current game data
         '''
 
-        if self.path:
-            self.load(self.path)
+        if len(self.games_) == 0:
+            raise RuntimeError('game data has not yet been updated or loaded')
 
-        return self
+        self.stash_ = copy.deepcopy(self.games_)
+
+    def restore(self):
+        ''' Restores from the previous stash
+        '''
+
+        if type(self.stash_) is not list:
+            raise RuntimeError('game data has not been previously stashed')
+
+        self.games_ = copy.deepcopy(self.stash_)
 
     def update(self):
         ''' Updates team and game data from the underlying API
@@ -510,63 +521,77 @@ class NFL():
 
         return NFLConference('AFC', self)
 
-    def set(self, wk, **kwargs):
-        ''' Set the final score(s) for games in a given week. You can use this to create
+    def set(self, wk, reset=True, **kwargs):
+        ''' Set the final score(s) for games and weeks. You can use this to create
             hypothetical outcomes and analyze the effect on team rankings. Scores
             are specified by team code and applied to the specified week's schedule.
             If the score is specified for only one team in a game, the score of the other
             team is assumed to be zero if not previously set.
 
-            wk:         week number
-            **kwargs    dict of team codes and final scores
+            wk:         week number or list-like of weeks
+            reset:      reset games that already have scores; otherwise, ignore such games
+            **kwargs    dict of team codes and scores
 
-            # typical example
+            If for any given game only one team score is provided, the other is assumed to be zero.
+            Use negative values to indicate 0-0 ties
+
+            # typical examples
+
             set(7, MIN=17, GB=10)
 
             The above will set the score for the MIN/GB game in week 7 if
             MIN and GB play each other in that week. Otherwise, it will
             set each team's score respectively and default their opponent's scores
             to 0. Scores for bye teams in that week are ignored.
+
+            set(range(16,19), PHI=1)
+
+            Assuming week 15 is finished, set PHI to win its remaining games
+
+            set(range(16, 19), PHI=0)
+            set(range(16, 19), True, WAS=0)
+
+            Set PHI to lose its remaining games, and WSH to lose its remaining games, except
+            where PHI and WSH play each other. In that case, the first call would set WSH
+            to win the head-to-head match
         '''
 
-        if type(wk) is dict:
-            for k,v in wk.items():
-                self.set(k, **v)
+        if type(wk) is int:
+            wk = [wk]
 
-            return
+        teams = kwargs.keys()
 
-        # sanity checks
-        bogus = set(kwargs.keys()) - set(self.teams_.keys())
-        if len(bogus) > 0:
-            raise KeyError('Invalid team codes: {}'.format(','.join(bogus)))       
-
-
+        # in reset mode, the function overwrites any previously set scores
         for elem in self.games_:
-            if wk == elem['wk']:
-                if elem['ht'] in kwargs:
-                    if kwargs[elem['ht']] < 0:
-                        # tie with unspecified score
-                        elem['hs'] = elem['as'] = 0
-                    else:
-                        elem['hs'] = kwargs[elem['ht']]
-                        if elem['as'] is None:
-                            elem['as'] = 0 if elem['hs'] > 0 else 1
+            if elem['wk'] not in wk:
+                continue
 
-                    elem['p'] = True
+            if elem['p'] and not reset:
+                continue
 
-                if elem['at'] in kwargs:
-                    if kwargs[elem['at']] < 0:
-                        elem['hs'] = elem['as'] = 0
-                    else:
-                        elem['as'] = kwargs[elem['at']]
-                        if elem['hs'] is None:
-                            elem['hs'] = 0 if elem['as'] > 0 else 1
+            (ht,at) = (elem['ht'],elem['at'])
+            if ht in teams and at in teams:
+                elem['hs'] = max(kwargs[ht],0)
+                elem['as'] = max(kwargs[at],0)
+                elem['p'] = True
 
-                    elem['p'] = True
+            elif ht in teams:
+                elem['hs'] = max(kwargs[ht],0)
+                if kwargs[ht] < 0:
+                    elem['as'] = elem['hs']     # signal a tie
+                else:
+                    elem['as'] = 0 if elem['hs'] > 0 else 1
 
-            elif wk < elem['wk']:
-                # assuming elements are sorted by week, we can stop at this point
-                break
+                elem['p'] = True
+
+            elif at in teams:
+                elem['as'] = max(kwargs[at],0)
+                if kwargs[at] < 0:
+                    elem['hs'] = elem['as']
+                else:
+                    elem['hs'] = 0 if elem['as'] > 0 else 1
+
+                elem['p'] = True
 
         self.stats = None # signal to rebuild stats
 
@@ -585,7 +610,7 @@ class NFL():
             if week is None or elem['wk'] in week:
                 if teams is None or elem['ht'] in teams or elem['at'] in teams:
                     elem['p'] = False
-                    elem['hs'] = elem['as'] = None
+                    elem['hs'] = elem['as'] = np.nan
 
         self.stats = None
 
