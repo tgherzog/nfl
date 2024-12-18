@@ -436,6 +436,7 @@ class NFL():
             raise RuntimeError('game data has not been previously stashed')
 
         self.games_ = copy.deepcopy(self.stash_)
+        self.stats = None
 
     def update(self):
         ''' Updates team and game data from the underlying API
@@ -529,6 +530,7 @@ class NFL():
             team is assumed to be zero if not previously set.
 
             wk:         week number or list-like of weeks
+            mode:       all, only, order
             reset:      reset games that already have scores; otherwise, ignore such games
             **kwargs    dict of team codes and scores
 
@@ -555,6 +557,13 @@ class NFL():
             where PHI and WSH play each other. In that case, the first call would set WSH
             to win the head-to-head match
         '''
+
+        # First argument can also be a dict, typically obtained by the scenarios function
+        if type(wk) is dict:
+            for k,v in wk.items():
+                self.set(k, reset, **v)
+
+            return
 
         if type(wk) is int:
             wk = [wk]
@@ -1151,7 +1160,7 @@ class NFL():
         # single team code
         return [teams]
 
-    def scenarios(self, weeks, teams):
+    def scenarios(self, weeks, teams, ties=True):
         '''Iterate over all possible game outcomes
            Returns a generator that produces all possible combinations of winning
            teams in the specified weeks. Results are a dictionary that can be
@@ -1176,7 +1185,10 @@ class NFL():
             return out
 
         sch = self.schedule(teams, weeks, by='game')
-        for row in outcomes([(1,0,-1)] * len(sch)):
+        values = (1,0,-1)
+        if not ties:
+            values = values[:-1]
+        for row in outcomes([values] * len(sch)):
             sch['hscore'] = row
             d = {k:{} for k in sch.index.get_level_values(0)}
             for k,elem in sch.iterrows():
