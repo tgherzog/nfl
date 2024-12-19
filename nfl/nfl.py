@@ -150,13 +150,13 @@ class NFLConference():
         champs = pd.Series(map(lambda x: x.split('-')[-1], champs.index), index=champs, name=self.code)
         champs = champs.reindex(self.host.tiebreaks(champs.index).index)
 
-        # pull wildcards from the remaining teams
-        wc = self.host.tiebreaks(self.teams - set(champs.index))
-        for elem in wc.index[:count-len(champs)]:
-            champs[elem] = 'Wildcard'
+        # append all remaining teams in tiebreaker order
+        champs = pd.concat([champs, pd.Series('', index=self.host.tiebreaks(self.teams-set(champs.index)).index)])
 
-        return champs
+        # mark wildcard slots
+        champs[4:7] = 'Wildcard'
 
+        return champs[:count]
 
 
     def __repr__(self):
@@ -522,7 +522,7 @@ class NFL():
 
         return NFLConference('AFC', self)
 
-    def set(self, wk, reset=True, **kwargs):
+    def set(self, wk, reset=True, ordered=False, **kwargs):
         ''' Set the final score(s) for games and weeks. You can use this to create
             hypothetical outcomes and analyze the effect on team rankings. Scores
             are specified by team code and applied to the specified week's schedule.
@@ -530,8 +530,8 @@ class NFL():
             team is assumed to be zero if not previously set.
 
             wk:         week number or list-like of weeks
-            mode:       all, only, order
-            reset:      reset games that already have scores; otherwise, ignore such games
+            reset:      overwrite previously set scores
+            ordered:    scores specify outcomes only in order of priority
             **kwargs    dict of team codes and scores
 
             If for any given game only one team score is provided, the other is assumed to be zero.
@@ -551,17 +551,26 @@ class NFL():
             Assuming week 15 is finished, set PHI to win its remaining games
 
             set(range(16, 19), PHI=0)
-            set(range(16, 19), True, WAS=0)
+            set(range(16, 19), reset=False, WSH=0)
 
             Set PHI to lose its remaining games, and WSH to lose its remaining games, except
-            where PHI and WSH play each other. In that case, the first call would set WSH
-            to win the head-to-head match
+            against PHI. In that case, the first call would set WSH
+            to win the head-to-head match, and the second call would ignore the WSH/PHI game
+            because it had been previously set
+
+            set(range(16, 19), ordered=True, DAL=0, WSH=1, PHI=0, NYG=1)
+
+            Use the following hierarchy to set outcomes in weeks 16-18:
+              1) DAL loses
+              2) WSH wins
+              3) PHI loses (except against DAL)
+              4) NYG wins (except against WSH)
         '''
 
         # First argument can also be a dict, typically obtained by the scenarios function
         if type(wk) is dict:
             for k,v in wk.items():
-                self.set(k, reset, **v)
+                self.set(k, reset, ordered, **v)
 
             return
 
@@ -569,6 +578,7 @@ class NFL():
             wk = [wk]
 
         teams = kwargs.keys()
+        inv = {0: 1, 1: 0, -1: 0}
 
         # in reset mode, the function overwrites any previously set scores
         for elem in self.games_:
@@ -579,7 +589,21 @@ class NFL():
                 continue
 
             (ht,at) = (elem['ht'],elem['at'])
-            if ht in teams and at in teams:
+            if ordered:
+                if ht in teams or at in teams:
+                    for k,v in kwargs.items():
+                        if k == ht:
+                            elem['hs'] = max(v, 0)
+                            elem['as'] = 1 if v == 0 else 0
+                            elem['p'] = True
+                            break
+                        elif k == at:
+                            elem['as'] = max(v, 0)
+                            elem['hs'] = 1 if v == 0 else 0
+                            elem['p'] = True
+                            break
+
+            elif ht in teams and at in teams:
                 elem['hs'] = max(kwargs[ht],0)
                 elem['as'] = max(kwargs[at],0)
                 elem['p'] = True
@@ -1084,7 +1108,7 @@ class NFL():
                 r[z.index[0]] = 'overall'
                 teams.remove(z.index[0])
             else:
-                # check out many divisions we're about to compare
+                # check how many divisions we're about to compare
                 subTeams = list(z.index[0:t+1])
                 divisions = subdiv(subTeams)
     
