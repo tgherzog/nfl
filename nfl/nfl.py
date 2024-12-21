@@ -664,9 +664,17 @@ class NFL():
         if type(limit) is int:
             limit = range(limit, limit+1)
 
+        if limit is None:
+            max_week = 25
+        else:
+            max_week = max(limit)
+
         teams = self._teams(teams)
 
         for elem in self.games_:
+            if elem['wk'] > max_week:   # optimization for single-week or single-game searches
+                break
+
             if limit is None or elem['wk'] in limit:
                 if teams is None or elem['at'] in teams or elem['ht'] in teams:
                     if elem['p'] or allGames:
@@ -1048,13 +1056,13 @@ class NFL():
            the team just before it.
         '''
         teams = list(self._teams(teams))
-        r = pd.Series(name='eliminated-by')
+        r = pd.Series(name='level')
 
         # shortcuts for efficiency: implement before call to _stats for speed
         if len(teams) == 0:
             return r
         elif len(teams) == 1:
-            r[teams[0]] = 'winner'
+            r[teams[0]] = 'overall'
             return r
         elif fast:
             # if only care about the winner, try to first discern based on overall score
@@ -1064,7 +1072,7 @@ class NFL():
                 z = self.stats.loc[teams,('overall','pct')].sort_values().copy()
                 
             if z.iloc[0]['pct'] > z.iloc[1]['pct']:
-                r[z.index[0]] = 'winner'
+                r[z.index[0]] = 'overall'
                 return r
 
 
@@ -1102,14 +1110,14 @@ class NFL():
             return len(s)-1
 
         while len(teams) > 1:
-            z = stats.loc[teams,('overall','pct')].sort_values().copy()
+            z = stats.loc[teams,('overall','pct')].sort_values(ascending=False).copy()
             t = check_until_same(z)
             if t == 0:
                 r[z.index[0]] = 'overall'
                 teams.remove(z.index[0])
             else:
                 # check how many divisions we're about to compare
-                subTeams = list(z.index[0:t+1])
+                subTeams = set(z.index[0:t+1])
                 divisions = subdiv(subTeams)
     
                 # may need to eliminate some teams if there are multiple divisions
@@ -1118,14 +1126,10 @@ class NFL():
                     for k,v in divisions.items():
                         if len(v) > 1:
                             s = self.tiebreaks(v)
-                            
-                            for t2 in reversed(s.index[1:]):
-                                r[t2] = 'division-tiebreaker:' + s[t2]
-                                teams.remove(t2)
-                                subTeams.remove(t2)                       
+                            subTeams -= set(s.index[1:])                      
                     
                 z = self.tiebreakers(subTeams).xs('pct', level=1, axis=1).T
-                z = z.sort_values(list(z.columns)).drop(z.columns[0], axis=1)
+                z = z.sort_values(list(z.columns), ascending=False).drop(z.columns[0], axis=1)
                 z_len = len(teams)
                 for rule in z.columns:
                     t = check_until_same(z[rule])
@@ -1138,10 +1142,10 @@ class NFL():
                     raise NotImplementedError("Can't resolve tiebreaker {}: teams are essentially equal".format(len(r)))
     
         # should always be one team left
-        r[teams[0]] = 'winner'
+        r[teams[0]] = ''
     
         # return series in reverse index order (best team first)
-        return r.reindex(r.index[::-1])
+        return r
 
     @staticmethod
     def result(a, b):
