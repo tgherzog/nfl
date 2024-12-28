@@ -224,6 +224,28 @@ class NFLSourceESPN(NFLSource):
 
             return df
 
+    def plays(self, nfl, code, week, count):
+
+        game = nfl.game(code, week)
+        if game:
+            url = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event={}'
+            self.lasturl = url.format(game['id'])
+            result = requests.get(self.lasturl).json()
+
+            df = pd.DataFrame(columns=['team', 'period', 'clock', 'down', 'loc', 'yds', 'type', 'desc'])
+            for drive in result['drives']['previous']:
+                for play in drive['plays']:
+                    df.loc[len(df)] = [drive['team']['abbreviation'], play['period']['number'], play['clock']['displayValue'],
+                        play['start'].get('shortDownDistanceText',''),
+                        play['start'].get('possessionText',''), play.get('statYardage',np.nan), play['type']['text'], play['text']
+                    ]
+
+            if count > 0:
+                return df.iloc[-count:]
+
+            return df
+
+
     def scoreboard(self, nfl):
         '''Return current scoreboard
         '''

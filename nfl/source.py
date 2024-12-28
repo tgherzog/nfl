@@ -8,6 +8,12 @@ class NFLSource():
 
         raise NotImplementedError('{} does not implement box scores'.format(self.__class__.__name__))
 
+    def plays(self, nfl, code, week, count):
+        '''Return most recent plays from the specified game
+        '''
+
+        raise NotImplementedError('{} does not implement play drives'.format(self.__class__.__name__))
+
     def scoreboard(self, nfl):
         '''Return live scores as an NFLScoreboard object
         '''

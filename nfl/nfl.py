@@ -83,6 +83,13 @@ class NFLTeam():
 
         return self.host.engine.boxscore(self.host, self.code, week)
 
+    def plays(self, count=10, week=None):
+
+        if week is None:
+            week = self.host.week
+
+        return self.host.engine.plays(self.host, self.code, week, count)
+
     def __repr__(self):
         wk = self.host.week or 1
         s  = self.schedule.loc[range(1,wk+3)].__repr__()
@@ -419,18 +426,31 @@ class NFL():
         self.stats = stats.assign(divrank=s).sort_values(['div','divrank']).drop('divrank', level=0, axis=1)
         return self.stats
 
-    def stash(self):
+    def stash(self, inplace=True):
         '''Saves a copy of current game data
         '''
 
         if len(self.games_) == 0:
             raise RuntimeError('game data has not yet been updated or loaded')
 
-        self.stash_ = copy.deepcopy(self.games_)
+        stash_ = copy.deepcopy(self.games_)
+        if inplace:
+            self.stash_ = stash_
+            return
+        
+        return stash_
 
-    def restore(self):
+
+    def restore(self, stash=None):
         ''' Restores from the previous stash
         '''
+
+        if stash:
+            if type(stash) is not list:
+                raise RuntimeError('object passed to restore() must be of type list')
+
+            self.games_ = copy.deepcopy(stash)
+            return
 
         if type(self.stash_) is not list:
             raise RuntimeError('game data has not been previously stashed')
