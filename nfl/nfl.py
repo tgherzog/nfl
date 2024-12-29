@@ -92,12 +92,12 @@ class NFLTeam():
 
     def __repr__(self):
         wk = self.host.week or 1
-        s  = self.schedule.loc[range(1,wk+3)].__repr__()
+        s  = self.schedule.loc[1:wk+3].__repr__()
         return '{}: {} ({})\n'.format(self.code, self.name, self.div) + self.standings.__repr__() + '\n' + s
 
     def _repr_html_(self):
         wk = self.host.week or 1
-        s  = self.schedule.loc[range(1,wk+3)]._repr_html_()
+        s  = self.schedule.loc[1:wk+3]._repr_html_()
         return '<h4>{}: {} ({})</h4>\n'.format(self.code, self.name, self.div) + self.standings._repr_html_() + '\n' + s
 
 
@@ -450,6 +450,7 @@ class NFL():
                 raise RuntimeError('object passed to restore() must be of type list')
 
             self.games_ = copy.deepcopy(stash)
+            self.stats = None
             return
 
         if type(self.stash_) is not list:
@@ -587,8 +588,18 @@ class NFL():
               4) NYG wins (except against WSH)
         '''
 
-        # First argument can also be a dict, typically obtained by the scenarios function
-        if type(wk) is dict:
+        # this mechanism allows keyword mapping to values
+        value_map = {'win': 1, 'loss': 0, 'tie': -1}
+        def _v(x):
+            return value_map.get(x, x)
+
+        # First argument can also be a series of scores or outcomes. Index must be a MultiIndex (week,team)
+        if type(wk) is pd.Series:
+            for w in wk.index.get_level_values(0).unique():
+                self.set(w, reset, ordered, **wk.xs(w).to_dict())
+
+        elif type(wk) is dict:
+            # deprecated
             for k,v in wk.items():
                 self.set(k, reset, ordered, **v)
 
@@ -612,6 +623,7 @@ class NFL():
             if ordered:
                 if ht in teams or at in teams:
                     for k,v in kwargs.items():
+                        v = _v(v)
                         if k == ht:
                             elem['hs'] = max(v, 0)
                             elem['as'] = 1 if v == 0 else 0
@@ -624,13 +636,14 @@ class NFL():
                             break
 
             elif ht in teams and at in teams:
-                elem['hs'] = max(kwargs[ht],0)
-                elem['as'] = max(kwargs[at],0)
+                elem['hs'] = max(_v(kwargs[ht]),0)
+                elem['as'] = max(_v(kwargs[at]),0)
                 elem['p'] = True
 
             elif ht in teams:
-                elem['hs'] = max(kwargs[ht],0)
-                if kwargs[ht] < 0:
+                v = _v(kwargs[ht])
+                elem['hs'] = max(v,0)
+                if v < 0:
                     elem['as'] = elem['hs']     # signal a tie
                 else:
                     elem['as'] = 0 if elem['hs'] > 0 else 1
@@ -638,8 +651,9 @@ class NFL():
                 elem['p'] = True
 
             elif at in teams:
-                elem['as'] = max(kwargs[at],0)
-                if kwargs[at] < 0:
+                v = _v(kwargs[at])
+                elem['as'] = max(v,0)
+                if v < 0:
                     elem['hs'] = elem['as']
                 else:
                     elem['hs'] = 0 if elem['as'] > 0 else 1
@@ -1167,6 +1181,58 @@ class NFL():
         # return series in reverse index order (best team first)
         return r
 
+    def wildcard(self, teams, seeds=3):
+        '''Run a wildcard analysis on the specified teams
+        '''
+
+        def subsets(data, size, unique=True):
+            '''Via a generator, returns data subsets of the specified size
+
+               data:   array of values
+               size:   size of the subsets
+               unique: specifies whether to iterate over previous values:
+
+                       subsets([1, 2, 3], 2, False) returns:
+                         [1, 2]
+                         [1, 3]
+                         [2, 3]
+
+                       subsets([1, 2, 3], 2, True) returns:
+                         [1, 2]
+                         [1, 3]
+                         [2, 1]
+                         [2, 3]
+                         [3, 1]
+                         [3, 2]
+            '''
+
+            n = 0
+            while n < len(data):
+                p = data[n]
+                n += 1
+                if size == 1:
+                    yield [p]
+                elif unique:
+                    for elem in subsets(data[n:], size-1):
+                        yield [p] + elem    
+                else:
+                    for elem in subsets(data[:n-1] + data[n:], size-1):
+                        yield [p] + elem
+
+        index = []
+        for i in range(2, len(teams)+1):
+            for elem in subsets(list(teams), i):
+                index.append(' '.join(elem))
+
+        df = pd.DataFrame(index=index, columns=range(1, seeds+1))
+        df.index.name = 'tiebreaker'
+        df.columns.name = 'order'
+        for i in df.index:
+            df.loc[i] = self.tiebreaks(i.split()).index[:seeds]
+
+        return df
+
+
     @staticmethod
     def result(a, b):
         
@@ -1181,19 +1247,22 @@ class NFL():
 
 
     def _teams(self, teams):
-        ''' Transforms teams into an array of actual team codes, or None
+        ''' Transforms scalar values into arrays. Iterable objects are,
+            for the most part, returned unchanged. Scalar values are
+            returned as single-element arrays. Recognized conference and
+            division codes are returns as the corresponding list of team codes
         '''
 
         if teams is None:
             return None
 
-        if type(teams) in [list, set, range]:
-            # already a list-like
-            return teams
-
         if type(teams) in [pd.Series, pd.Index]:
             # a list-like that needs to be cast
             return list(teams)
+
+        if type(teams) is not str and hasattr(teams, '__iter__'):
+            # assume no problems iterating
+            return teams
 
         # below here assume a scalar
 
@@ -1209,40 +1278,33 @@ class NFL():
         return [teams]
 
     def scenarios(self, weeks, teams, ties=True):
-        '''Iterate over all possible game outcomes
-           Returns a generator that produces all possible combinations of winning
-           teams in the specified weeks. Results are a dictionary that can be
-           passed to set
+        '''Returns a dataframe of scenarios with the specified constraints
         '''
 
-        # subroutine based on this:
-        # https://stackoverflow.com/questions/1208118/using-numpy-to-build-an-array-of-all-combinations-of-two-arrays/1235363#1235363
-        def outcomes(arrays, out=None):
-            arrays = [np.asarray(x) for x in arrays]
-            n = np.prod([x.size for x in arrays])
-            if out is None:
-                out = np.zeros([n, len(arrays)], dtype='int')
+        # ascertain the conference with sanity check
+        conf_teams = {}
+        for k,v in self.confs_.items():
+            for elem in v:
+                conf_teams[elem] = k
 
-            z = int(n / arrays[0].size)
-            out[:,0] = np.repeat(arrays[0], z)
-            if arrays[1:]:
-                outcomes(arrays[1:], out=out[0:z, 1:])
-                for j in range(1, arrays[0].size):
-                    out[j*z:(j+1)*z, 1:] = out[0:z, 1:]
+        c = set(conf_teams[k] for k in teams)
+        if len(c) > 1:
+            raise ValueError('Teams must all belong to the same conference')
 
-            return out
+        conf = NFLConference(list(c)[0], self)
+        
+        with NFLScenarioMaker(self, weeks, teams, ties) as gen:
+            df = gen.frame(['playoffs'])
+            for option in gen:
+                x = len(df)
+                df.loc[x] = option
+                df.loc[x, 'playoffs'] = False
+                self.set(option)
+                p = conf.playoffs()
+                z = [('playoffs',i) for i in set(teams) & set(p.index)]
+                df.loc[x, z] = True
 
-        sch = self.schedule(teams, weeks, by='game')
-        values = (1,0,-1)
-        if not ties:
-            values = values[:-1]
-        for row in outcomes([values] * len(sch)):
-            sch['hscore'] = row
-            d = {k:{} for k in sch.index.get_level_values(0)}
-            for k,elem in sch.iterrows():
-                d[k[0]][k[1]] = elem['hscore']
-
-            yield d
+            return df
 
     @staticmethod
     def _engine(name):
@@ -1252,6 +1314,117 @@ class NFL():
             return NFLSourceESPN()
 
         raise ValueError('Unrecognized engine: {}'.format(name))
+
+
+class NFLScenarioMaker():
+    '''Facilitates generating and testing different win/lose/tie scenarios,
+       typically to analyze the outcome on the playoff picture.
+
+       If impelemented in a "with" context the object saves and restores
+       the game state.
+
+       Typical usage:
+
+       weeks = [17, 18]
+       teams = ['LAC', 'DEN', 'CIN', 'IND', 'MIA']
+       with NFLScenarioMaker(nfl, weeks, teams, ties=False) as s:
+          df = s.frame(['playoffs])
+          for option in s:
+             z = len(df)
+
+    '''
+
+    def __init__(self, nfl, weeks, teams, ties=True):
+        self.nfl = nfl
+        self.weeks = weeks
+        self.teams = teams
+        self.ties = ties
+        self.stash = None
+        self.completed = None
+
+    def __enter__(self):
+        self.weeks = self.nfl._teams(self.weeks)
+        self.teams = self.nfl._teams(self.teams)
+        self.stash = self.nfl.stash(inplace=True)
+        self.completed = self.nfl.schedule(self.teams, self.weeks, by='team')['wlt'].replace('', np.nan).dropna().index
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.nfl.restore(self.stash)
+
+    def __iter__(self):
+        '''Iterate over possible scenarios
+        '''
+
+        # subroutine based on this:
+        # https://stackoverflow.com/questions/1208118/using-numpy-to-build-an-array-of-all-combinations-of-two-arrays/1235363#1235363
+        # 12/24: new implementation using the "yield from" construct, which returns a generator
+        # instead of a potentally very large double array
+        def outcomes(arrays, z=[]):
+
+            x = arrays[0]
+            if len(arrays) > 1:
+                for elem in x:
+                    yield from outcomes(arrays[1:], z+[elem])
+            else:
+                for elem in x:
+                    yield z + [elem]
+
+
+        aresults = {'win': 'loss', 'loss': 'win', 'tie': 'tie'}
+
+        nfl = self.nfl
+        teams = nfl._teams(self.teams)
+        weeks = nfl._teams(self.weeks)
+
+        sch = nfl.schedule(teams, weeks, by='game')
+        wlt = nfl.schedule(teams, weeks, by='team')['wlt'].replace('',np.nan)
+        s = pd.Series(index=pd.MultiIndex.from_product([weeks, teams], names=['week','team']), dtype=str)
+        values = ('win','loss','tie')
+        if not self.ties:
+            values = values[:-1]
+        for row in outcomes([values] * len(sch)):
+            sch['hscore'] = row
+            for k,elem in sch.iterrows():
+                if k in s.index:
+                    s[k] = elem['hscore']
+                
+                if (k[0],elem['ateam']) in s.index:
+                    s[(k[0],elem['ateam'])] = aresults[elem['hscore']]
+
+            # skip scenarios that conflict with existing scores
+            if (wlt.fillna(s) == s).all():
+                yield s.drop(self.completed)
+
+
+    def frame(self, extra=[]):
+        '''Return a DataFrame structured to hold the set of scenarios. Typically
+           you call this in advance of iterating over the object.
+
+           extra specifiies additional level-0 column names
+
+           Typical example:
+
+           teams = {'DEN', 'MIA', 'LAC'}
+           weeks = [17, 18]
+
+           with nfl.scenarios(weeks, teams) as s:
+               df = s.frame(['playoff'])
+
+               # NB: computationally intense: up to 729 possibilities, could take 10m or more
+               for option in s:
+                  at = len(df)
+                  df.loc[at] = option
+                  nfl.loc[at, 'playoff'] = ''
+                  p = nfl.AFC.playoffs()
+                  z = [('playoff', i) for i in set(teams) & set(p.index)]
+                  nfl.loc[at, z] = 'x'
+        '''
+
+        weeks = self.nfl._teams(self.weeks) + extra
+        teams = self.nfl._teams(self.teams)
+        df = pd.DataFrame(columns=pd.MultiIndex.from_product([weeks, teams], names=['week', 'team']))
+        return df.drop(self.completed, axis=1)
 
 
 class NFLScoreboard():

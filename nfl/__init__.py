@@ -26,7 +26,8 @@ from .nfl import (
 	NFLDivision,
 	NFLConference,
 	NFLScoreboard,
-    NFLRoster
+    NFLRoster,
+    NFLScenarioMaker
 )
 
 from .profootballref import NFLSourceProFootballRef
