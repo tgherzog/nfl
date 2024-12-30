@@ -1082,12 +1082,18 @@ class NFL():
         return df
 
 
-    def tiebreaks(self, teams, fast=False):
+    def tiebreaks(self, teams, fast=False, divRule=True):
         '''Returns a series with the results of a robust tiebreaker analysis for teams
-           The series index will be in reverse elimination order, i.e. the winner (last
-           eliminated team) ordered first and the loser (first eliminated team) ordered last.
-           The series value corresponds to the reason each team was eliminated, relative to
-           the team just before it.
+           Team codes comprise the series index in hierarchical order, while the series
+           value indicates the rule (or basis) for each team besting the one below it
+
+           teams     a list-like of team codes, or a division/conference code
+
+           fast      If true, then only return the highest ranking team. The function
+                     also takes measures to avoid expensive calculations if possible
+
+           divRule   Enforce the "one-club-per-division" rule as stated in the wildcard
+                     tiebreaking procedures
         '''
         teams = list(self._teams(teams))
         r = pd.Series(name='level')
@@ -1099,36 +1105,23 @@ class NFL():
             r[teams[0]] = 'overall'
             return r
         elif fast:
-            # if only care about the winner, try to first discern based on overall score
+            # if only care about the winner, try to first discern based on overall pct
             if self.stats is None:
-                z = self.wlt(teams)
+                z = self.wlt(teams)['pct']
             else:
-                z = self.stats.loc[teams,('overall','pct')].sort_values().copy()
+                z = self.stats.loc[teams,('overall','pct')]
                 
-            if z.iloc[0]['pct'] > z.iloc[1]['pct']:
+            z = z.copy().sort_values(ascending=False)
+            if z.diff(-1).iloc[0] > 0:
                 r[z.index[0]] = 'overall'
                 return r
 
-
         stats = self._stats()
-        
-        def subdiv(teams):
-            '''Returns a dict for the corresponding divisions of the specified teams. Dict
-               keys are division codes and values are arrays of correponding team codes
-            '''
-
-            s = {}
-            for elem in teams:
-                d = self.teams_[elem]['div']
-                if d not in s:
-                    s[d] = []
-
-                s[d].append(elem)
-
-            return s
 
         def check_until_same(s):
-            '''Returns the number of initial elements with the same value as the next one
+            '''Returns the number of initial elements with the same value as the next one.
+               0 means the first element is unique
+               len(s)-1 means they are all the same
             '''
 
             if s.isna().all() or (s == np.inf).any():
@@ -1143,42 +1136,103 @@ class NFL():
 
             return len(s)-1
 
+        def msg(op, codes):
+            return 'tiebreaks: {} - {}'.format(op, ','.join(codes))
+
+        def test(t):
+            '''Runs tests to determine the exclusive highest-ranking team.
+               If successful, a tuple (team_code,rule) is returned
+               If a condition is encountered requiring a restart on a subset
+               of teams, a tuple (surviving_teams, rule) is returned
+
+               t    the set of teams to test. Per wildcard rules, only 1 team from each division
+                    should be included (it does not test for this)
+            '''
+
+            # count divs
+            divs = set()
+            for elem in t:
+                divs.add(self.teams_[elem]['div'])
+
+            z = self.tiebreakers(t).xs('pct', level=1, axis=1).T
+
+            # sort by values for each rule, and drop the 1st rule (overall) since that was already
+            # tested by the calling function
+            z = z.sort_values(list(z.columns), ascending=False).drop(z.columns[0], axis=1)
+            for rule in z.columns:
+                if rule == 'head-to-head' and len(divs) > 1 and len(z) > 2:
+                    # special case for ties amongst 3+ teams across divisions
+                    # a "clean sweep" either picks the top team or eliminates the bottom one
+                    # Note the tiebreakers function ensures that if there isn't a clean winning or losing sweep
+                    # then the rule is invalidated
+                    if z.iloc[0][rule] == 1:
+                        return (z.index[0], rule)
+                    elif z.iloc[-1][rule] == 0:
+                        return (t - {z.index[-1]}, rule)
+                else:
+                    x = check_until_same(z[rule])
+                    if x == 0:
+                        return (z.index[0], rule)
+                    elif x < len(z)-1:
+                        # multiple top teams at this rule, so eliminate the remainder for this round
+                        # and start over
+                        return (t - set(z.index[x+1:]), rule)
+
+            raise RuntimeError("Can't resolve tiebreaker: teams are essentially equal (coin toss)")
+
         while len(teams) > 1:
-            z = stats.loc[teams,('overall','pct')].sort_values(ascending=False).copy()
+            if fast and len(r) > 0:
+                return r
+
+            logging.debug(msg('1.1 (Begin)', teams))
+
+            # apply division tiebreakers if necessary. start by counting # of divisions
+            divs = {}
+            for elem in teams:
+                d = self.teams_[elem]['div']
+                if d not in divs:
+                    divs[d] = set()
+
+                divs[d].add(elem)
+            
+            subTeams = set(teams)
+            if divRule and len(divs) > 1:
+                #  multiple divisions: eliminate all but the top team from each
+                for k,v in divs.items():
+                    if len(v) > 1:
+                        logging.debug(msg('2.1 (1 club/division)', v))
+                        s = self.tiebreaks(v, fast=True)
+                        subTeams -= v - {s.index[0]}
+
+                if len(subTeams) < len(teams):
+                    logging.debug(msg('2.2 (Pruned)', subTeams))
+
+            # we first test the overall rule since that can be done inexpensively and hopefully
+            # will eliminate a significant number of candidates. Otherwise,
+            # we call the test function which calculates all the tiebreaker rules (at a significant
+            # expense), which we call with the surviving subset of teams
+            z = stats.loc[list(subTeams),('overall','pct')].sort_values(ascending=False).copy()
             t = check_until_same(z)
             if t == 0:
                 r[z.index[0]] = 'overall'
                 teams.remove(z.index[0])
+                logging.debug(msg('3.1 (Select)', [z.index[0],'overall']))
             else:
-                # check how many divisions we're about to compare
-                subTeams = set(z.index[0:t+1])
-                divisions = subdiv(subTeams)
-    
-                # may need to eliminate some teams if there are multiple divisions
-                # (first team from each division only)
-                if len(divisions) > 1:
-                    for k,v in divisions.items():
-                        if len(v) > 1:
-                            s = self.tiebreaks(v)
-                            subTeams -= set(s.index[1:])                      
-                    
-                z = self.tiebreakers(subTeams).xs('pct', level=1, axis=1).T
-                z = z.sort_values(list(z.columns), ascending=False).drop(z.columns[0], axis=1)
-                z_len = len(teams)
-                for rule in z.columns:
-                    t = check_until_same(z[rule])
-                    if t == 0:
-                        r[z.index[0]] = rule
-                        teams.remove(z.index[0])
+                subTeams = set(z.index[:t+1])
+                while True:
+                    logging.debug(msg('1.2 (Test)', subTeams))
+                    (result,rule) = test(subTeams)
+                    if type(result) is set:
+                        logging.debug(msg('1.3 (Restart)', list(result) + [rule]))
+                        subTeams = result
+                    else:
+                        r[result] = rule
+                        teams.remove(result)
+                        logging.debug(msg('3.2 (Select)', [result,rule]))
                         break
     
-                if z_len == len(teams):
-                    raise NotImplementedError("Can't resolve tiebreaker {}: teams are essentially equal".format(len(r)))
-    
-        # should always be one team left
+        # should always be one team left (runt of the litter)
         r[teams[0]] = ''
-    
-        # return series in reverse index order (best team first)
         return r
 
     def wildcard(self, teams, seeds=3):
@@ -1428,6 +1482,14 @@ class NFLScenarioMaker():
 
 
 class NFLScoreboard():
+    '''A wrapper class for scoreboard display of live games. Typically you
+       obtain or display this through the nfl.scoreboard propety.
+
+       Class attributes:
+            week        scoreboard week
+            year        scoreboard year
+            scoreboard  pandas DataFrame
+    '''
     week = None
     year = None
     scoreboard = None
