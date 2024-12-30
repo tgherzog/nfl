@@ -30,5 +30,16 @@ from .nfl import (
     NFLScenarioMaker
 )
 
+# include these objects in the help docs
+__all__ = [
+  "NFL",
+  "NFLTeam",
+  "NFLDivision",
+  "NFLConference",
+  "NFLScoreboard",
+  "NFLRoster",
+  "NFLScenarioMaker"
+]
+
 from .profootballref import NFLSourceProFootballRef
 from .espn import NFLSourceESPN
