@@ -16,6 +16,8 @@ class NFLSourceESPN(NFLSource):
 
     def __init__(self):
         self.zone = tz.gettz('America/New_York')
+        self.nettd_cache = {}
+        self.nettd_gamecache = {}
 
     def extra_fields(self, type):
 
@@ -124,9 +126,7 @@ class NFLSourceESPN(NFLSource):
 
         game = nfl.game(code, week)
         if game:
-            url = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event={}'
-            self.lasturl = url.format(game['id'])
-            result = requests.get(self.lasturl).json()
+            result = self.gameinfo(game['id'])
 
             setup = {
                 'head': ['week', 'opp', 'date', 'event'],
@@ -228,9 +228,7 @@ class NFLSourceESPN(NFLSource):
 
         game = nfl.game(code, week)
         if game:
-            url = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event={}'
-            self.lasturl = url.format(game['id'])
-            result = requests.get(self.lasturl).json()
+            result = self.gameinfo(game['id'])
 
             df = pd.DataFrame(columns=['team', 'period', 'clock', 'down', 'loc', 'yds', 'type', 'desc'])
             for drive in result['drives']['previous']:
@@ -325,6 +323,53 @@ class NFLSourceESPN(NFLSource):
         df.sort_values(['side', 'position'], inplace=True)
         return NFLRoster(df.replace({'side': r'.+:(.+)'}, {'side': r'\1'}, regex=True))
 
+    def net_touchdowns(self, nfl, teams):
+        '''Returns net touchdowns for the specified teams as a dict
+        '''
+
+        if type(teams) is str:
+            teams = [teams]
+
+        # A results cache helps keep expensive API calls to a minimum
+        # we cache at both the team and game levels because apparently
+        # there a call limit on the API which we might hit at some point
+        cache_teams = set(self.nettd_cache.keys())
+
+        api_teams = set(teams) - cache_teams        # teams we'll need to fetch from API
+        cache_teams &= set(teams)                   # teams we can fetch from cache
+
+        td = {k:0 for k in api_teams}
+
+        if len(api_teams) > 0:
+            for game in nfl.games(api_teams):
+                if game['id'] in self.nettd_gamecache:
+                    tds = self.nettd_gamecache[game['id']]
+                else:
+                    tds = 0     # count of net tds for home team. for away team, it's the negative value
+                    
+                    result = self.gameinfo(game['id'])
+                    for elem in result['drives']['previous']:
+                        if elem['shortDisplayResult'] == 'TD':
+                            if elem['team']['abbreviation'] == game['ht']:
+                                tds += 1
+                            else:
+                                tds -= 1
+
+                    self.nettd_gamecache[game['id']] = tds
+
+                if game['ht'] in api_teams:
+                    td[game['ht']] += tds
+
+                if game['at'] in api_teams:
+                    td[game['at']] -= tds
+
+
+        # merge data from cache and update cache
+        td |= {k:self.nettd_cache[k] for k in cache_teams}
+        self.nettd_cache |= {k:td[k] for k in api_teams}
+
+        return td
+
     def to_datetime(self, date):
         '''Returns string converted to a zoneless datetime in the current time zone
         '''
@@ -337,3 +382,11 @@ class NFLSourceESPN(NFLSource):
         url = 'https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/seasons/{}/types/{}'.format(year, type)
         result = requests.get(url).json()
         return (pd.to_datetime(result['startDate']), pd.to_datetime(result['endDate']))
+
+    def gameinfo(self, id):
+        '''Return detail for the specified game
+        '''
+
+        url = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event={}'
+        self.lasturl = url.format(id)
+        return requests.get(self.lasturl).json()

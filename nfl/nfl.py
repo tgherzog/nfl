@@ -973,7 +973,7 @@ class NFL():
         return self._stats().loc[team][['overall','division','conference']].unstack()
 
 
-    def tiebreakers(self, teams):
+    def tiebreakers(self, teams, nettd=False):
         '''Return tiebreaker analysis for specified teams
 
         Each row in the returned dataframe is the results of a step in the NFL's tiebreaker procedure
@@ -1003,6 +1003,10 @@ class NFL():
         common_opponents = self.opponents(teams)
         divisions = set()
         stats = self._stats()
+        if nettd:
+            ntd = self.engine.net_touchdowns(self, teams)
+        else:
+            ntd = {}
 
         # determine which divisions are in the specified list. If more than one then adjust the tiebreaker order
         for t in teams:
@@ -1031,6 +1035,9 @@ class NFL():
 
         df.loc['overall-netpoints'] = np.nan
 
+        if nettd:
+            df.loc['net-touchdowns'] = np.nan
+
         (h2h,gm) = self._wlt(teams, within=teams)
         co  = self._wlt(teams, within=common_opponents)[0]
 
@@ -1053,6 +1060,9 @@ class NFL():
                 df.loc['conference-netpoints', (team,'pct')] = stats.loc[team, ('misc', 'conf-pts-scored')] - stats.loc[team, ('misc', 'conf-pts-allowed')]
 
             df.loc['overall-netpoints', (team,'pct')] = stats.loc[team, ('misc', 'pts-scored')] - stats.loc[team, ('misc', 'pts-allowed')]
+
+            if nettd:
+                df.loc['net-touchdowns', (team,'pct')] = ntd.get(team, np.nan)
 
             # sanity checks: we use inf to indicate that the column should be ignored
             if not gm.isin([np.nan, gm.iloc[0,1]]).all().all():
@@ -1082,7 +1092,7 @@ class NFL():
         return df
 
 
-    def tiebreaks(self, teams, fast=False, divRule=True):
+    def tiebreaks(self, teams, fast=False, nettd=False, divRule=True):
         '''Returns a series with the results of a robust tiebreaker analysis for teams
            Team codes comprise the series index in hierarchical order, while the series
            value indicates the rule (or basis) for each team besting the one below it
@@ -1154,7 +1164,7 @@ class NFL():
             for elem in t:
                 divs.add(self.teams_[elem]['div'])
 
-            z = self.tiebreakers(t).xs('pct', level=1, axis=1).T
+            z = self.tiebreakers(t, nettd=nettd).xs('pct', level=1, axis=1).T
 
             # sort by values for each rule, and drop the 1st rule (overall) since that was already
             # tested by the calling function
@@ -1178,7 +1188,8 @@ class NFL():
                         # and start over
                         return (t - set(z.index[x+1:]), rule)
 
-            raise RuntimeError("Can't resolve tiebreaker: teams are essentially equal (coin toss)")
+            suggest = '' if nettd else ' (try passing nettd=True)'
+            raise RuntimeError("Can't resolve tiebreaker: teams are essentially equal.{}".format(suggest))
 
         while len(teams) > 1:
             if fast and len(r) > 0:
@@ -1201,7 +1212,7 @@ class NFL():
                 for k,v in divs.items():
                     if len(v) > 1:
                         logging.debug(msg('2.1 (1 club/division)', v))
-                        s = self.tiebreaks(v, fast=True)
+                        s = self.tiebreaks(v, nettd=nettd, fast=True)
                         subTeams -= v - {s.index[0]}
 
                 if len(subTeams) < len(teams):
