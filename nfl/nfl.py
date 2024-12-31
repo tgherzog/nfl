@@ -204,6 +204,7 @@ class NFL():
         self.confs_  = {}
         self.games_  = []
         self.max_week = 0
+        self.week = None
         self.stats = None
         self.year = year
         self.engine = engine
