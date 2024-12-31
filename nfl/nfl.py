@@ -147,14 +147,16 @@ class NFLConference():
 
 
     def playoffs(self, count=7):
-        '''Current conference seeds in order
+        '''Current conference seeds, in order
+
+           count     number of seeds to return
         '''
 
         # get top-listed teams from each division
         champs = self.standings.reset_index().groupby(('div','')).first()['team']
 
         # restructure and reorder by seed
-        champs = pd.Series(map(lambda x: x.split('-')[-1], champs.index), index=champs, name=self.code)
+        champs = pd.Series(map(lambda x: x.split('-')[-1], champs.index), index=champs)
         champs = champs.reindex(self.host.tiebreaks(champs.index).index)
 
         # append all remaining teams in tiebreaker order
@@ -162,6 +164,7 @@ class NFLConference():
 
         # mark wildcard slots
         champs[4:7] = 'Wildcard'
+        champs.name = self.code
 
         return champs[:count]
 
@@ -1342,21 +1345,40 @@ class NFL():
         # single team code
         return [teams]
 
-    def scenarios(self, weeks, teams, ties=True):
-        '''Returns a dataframe of scenarios with the specified constraints
+    def scenarios(self, weeks, teams, spots=1, ties=True):
+        '''Returns a dataframe of scenarios and outcomes with the specified constraints
+
+           This function is essentially a wrapper for NFLScenarioMaker with
+           the most common use case, i.e. determining playoff spots. You
+           can customize and optimize the model by implementing NFLScenarioMaker
+           directly (see docs).
+
+
+           weeks    weeks for which to generate scenarios
+
+           teams    list-list of teams for which to generate scenarios
+
+           spots    number of available playoff spots. If 0, then NFLConference.playoffs
+                    is used to determine eligibility, instead of the
+                    general-purpose tiebreaker procedure. A value
+                    of 1 sets the analysis to "fast" mode, which is
+                    substantially more efficient
+
+           ties     whether to include ties as possible outcomes
         '''
 
-        # ascertain the conference with sanity check
-        conf_teams = {}
-        for k,v in self.confs_.items():
-            for elem in v:
-                conf_teams[elem] = k
+        if spots == 0:
+            # ascertain the conference with sanity check
+            conf_teams = {}
+            for k,v in self.confs_.items():
+                for elem in v:
+                    conf_teams[elem] = k
 
-        c = set(conf_teams[k] for k in teams)
-        if len(c) > 1:
-            raise ValueError('Teams must all belong to the same conference')
+            c = set(conf_teams[k] for k in teams)
+            if len(c) > 1:
+                raise ValueError('Teams must all belong to the same conference')
 
-        conf = NFLConference(list(c)[0], self)
+            conf = NFLConference(list(c)[0], self)
         
         with NFLScenarioMaker(self, weeks, teams, ties) as gen:
             df = gen.frame(['playoffs'])
@@ -1365,9 +1387,14 @@ class NFL():
                 df.loc[x] = option
                 df.loc[x, 'playoffs'] = False
                 self.set(option)
-                p = conf.playoffs()
-                z = [('playoffs',i) for i in set(teams) & set(p.index)]
-                df.loc[x, z] = True
+                if spots == 0:
+                    p = conf.playoffs()
+                    z = [('playoffs',i) for i in set(teams) & set(p.index)]
+                    df.loc[x, z] = True
+                else:
+                    tb = self.tiebreaks(teams, fast=(spots==1))
+                    z = [('playoffs',i) for i in tb.index[:spots]]
+                    df.loc[x, z] = True
 
             return df
 
