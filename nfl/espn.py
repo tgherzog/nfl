@@ -230,10 +230,18 @@ class NFLSourceESPN(NFLSource):
         if game:
             result = self.gameinfo(game['id'])
 
-            df = pd.DataFrame(columns=['team', 'period', 'clock', 'down', 'loc', 'yds', 'type', 'desc'])
+            if not result.get('drives'):
+                return None         # future games have no drive data
+
+            df = pd.DataFrame(columns=['team', 'codes', 'period', 'clock', 'down', 'loc', 'yds', 'type', 'desc'])
             for drive in result['drives']['previous']:
                 for play in drive['plays']:
-                    df.loc[len(df)] = [drive['team']['abbreviation'], play['period']['number'], play['clock']['displayValue'],
+                    codes = 'S' if play['scoringPlay'] else ''
+                    if 'team' in play['start'] and 'team' in play['end']:
+                        if play['start']['team']['id'] != play['end']['team']['id']:
+                            codes += 'T'
+
+                    df.loc[len(df)] = [drive['team']['abbreviation'], codes, play['period']['number'], play['clock']['displayValue'],
                         play['start'].get('shortDownDistanceText',''),
                         play['start'].get('possessionText',''), play.get('statYardage',np.nan), play['type']['text'], play['text']
                     ]
@@ -346,7 +354,7 @@ class NFLSourceESPN(NFLSource):
                     tds = self.nettd_gamecache[game['id']]
                 else:
                     tds = 0     # count of net tds for home team. for away team, it's the negative value
-                    
+
                     result = self.gameinfo(game['id'])
                     for elem in result['drives']['previous']:
                         if elem['shortDisplayResult'] == 'TD':
