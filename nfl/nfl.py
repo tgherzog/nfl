@@ -178,14 +178,24 @@ class NFLConference():
 class NFL():
     '''Impelementation class for NFL data operations
 
-       By default calls to scoreboard update the game database in real-time.
-       Set autoUpdate=False to disable
-    '''
+       NFL defines the following instance variables that you can use and change:
 
-    year = None
-    week = None
-    path = None
-    autoUpdate = True
+       week      Current week number. This is automatically set by NFL.update()
+                 and NFL.load(), and is used as a default argument by several functions
+
+       year      Current season. In theory this can be changed work with a previous
+                 season, although that's API independent and hasn't really been tested
+
+       engine    API engine. The ESPN engine is the most robust, but others are
+                 available or could be written
+
+       autoUpdate      Determines whether NFLScoreboards automatically update the game database
+                       when games complete. Set to False if you don't want this
+
+       netTouchdowns   Determines whether "net touchdowns" are included in tiebreaker determinations
+                       Fetching this data from the API is generally time consuming and rarely
+                       needed, so leave it set to False in most situations
+    '''
 
     def __init__(self, year=None, engine=None):
         self.teams_  = {}
@@ -198,6 +208,9 @@ class NFL():
         self.year = year
         self.engine = engine
         self.stash_ = None
+        self.autoUpdate = True
+        self.netTouchdowns = False
+
         if not self.year:
             self.year = current_season()
 
@@ -976,7 +989,7 @@ class NFL():
         return self._stats().loc[team][['overall','division','conference']].unstack()
 
 
-    def tiebreakers(self, teams, nettd=False):
+    def tiebreakers(self, teams):
         '''Return tiebreaker analysis for specified teams
 
         Each row in the returned dataframe is the results of a step in the NFL's tiebreaker procedure
@@ -1006,7 +1019,7 @@ class NFL():
         common_opponents = self.opponents(teams)
         divisions = set()
         stats = self._stats()
-        if nettd:
+        if self.netTouchdowns:
             ntd = self.engine.net_touchdowns(self, teams)
         else:
             ntd = {}
@@ -1038,7 +1051,7 @@ class NFL():
 
         df.loc['overall-netpoints'] = np.nan
 
-        if nettd:
+        if self.netTouchdowns:
             df.loc['net-touchdowns'] = np.nan
 
         (h2h,gm) = self._wlt(teams, within=teams)
@@ -1064,7 +1077,7 @@ class NFL():
 
             df.loc['overall-netpoints', (team,'pct')] = stats.loc[team, ('misc', 'pts-scored')] - stats.loc[team, ('misc', 'pts-allowed')]
 
-            if nettd:
+            if self.netTouchdowns:
                 df.loc['net-touchdowns', (team,'pct')] = ntd.get(team, np.nan)
 
             # sanity checks: we use inf to indicate that the column should be ignored
@@ -1095,7 +1108,7 @@ class NFL():
         return df
 
 
-    def tiebreaks(self, teams, fast=False, nettd=False, divRule=True):
+    def tiebreaks(self, teams, fast=False, divRule=True):
         '''Returns a series with the results of a robust tiebreaker analysis for teams
            Team codes comprise the series index in hierarchical order, while the series
            value indicates the rule (or basis) for each team besting the one below it
@@ -1167,7 +1180,7 @@ class NFL():
             for elem in t:
                 divs.add(self.teams_[elem]['div'])
 
-            z = self.tiebreakers(t, nettd=nettd).xs('pct', level=1, axis=1).T
+            z = self.tiebreakers(t).xs('pct', level=1, axis=1).T
 
             # sort by values for each rule, and drop the 1st rule (overall) since that was already
             # tested by the calling function
@@ -1191,7 +1204,7 @@ class NFL():
                         # and start over
                         return (t - set(z.index[x+1:]), rule)
 
-            suggest = '' if nettd else ' (try passing nettd=True)'
+            suggest = '' if self.netTouchdowns else ' (try setting nfl.netTouchdowns=True)'
             raise RuntimeError("Can't resolve tiebreaker: teams are essentially equal.{}".format(suggest))
 
         while len(teams) > 1:
@@ -1215,7 +1228,7 @@ class NFL():
                 for k,v in divs.items():
                     if len(v) > 1:
                         logging.debug(msg('2.1 (1 club/division)', v))
-                        s = self.tiebreaks(v, nettd=nettd, fast=True)
+                        s = self.tiebreaks(v, fast=True)
                         subTeams -= v - {s.index[0]}
 
                 if len(subTeams) < len(teams):
