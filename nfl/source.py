@@ -31,7 +31,7 @@ class NFLSource():
         '''
 
         raise NotImplementedError('{} does not implement net touchdowns'.format(self.__class__.__name__))
-        
+
     def extra_fields(self, type):
-        '''Return extra field names requested by this source
+        '''Return extra field names requested by this source. These will be stored in the games database
         '''

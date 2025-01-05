@@ -835,7 +835,7 @@ class NFL():
             for game in self.games(teams=teams2, limit=weeks2, allGames=True):
                 df.loc[len(df)] = [game['wk'], game['ht'], game['at'], game['hs'], game['as'], to_date(game['ts'])]
 
-            if type(teams) is str and type(weeks) is int:
+            if type(teams) in [str, NFLTeam] and type(weeks) is int:
                 # need a special test here to make sure we have a data frame
                 if len(df) > 0:
                     return df.drop('week', axis=1).iloc[0]
@@ -869,6 +869,8 @@ class NFL():
             return df.loc[(weeks,teams)]
         elif type(teams) is str:
             return df.xs(teams, level=1)
+        elif type(teams) is NFLTeam:
+            return df.xs(teams.code, level=1)
         elif type(weeks) is int:
             return df.xs(weeks, level=0)
 
@@ -1342,12 +1344,17 @@ class NFL():
             # a list-like that needs to be cast
             return list(teams)
 
+        if type(teams) is NFLTeam:
+            return [teams.code]
+
+        if type(teams) in [NFLDivision, NFLConference]:
+            return list(teams.teams)
+
         if type(teams) is not str and hasattr(teams, '__iter__'):
             # assume no problems iterating
             return teams
 
         # below here assume a scalar
-
         if teams in self.divs_:
             # division code
             return self.divs_[teams]
