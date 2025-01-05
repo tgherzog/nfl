@@ -322,6 +322,10 @@ class NFLSourceESPN(NFLSource):
         sides = {'offense': '1:OFF', 'defense': '2:DEF', 'specialTeam': '3:SPEC', 'injuredReserveOrOut': '4:INJURED'}
         results = requests.get(url.format(code)).json()
 
+        # sanity check: since caller may be caching results
+        if 'team' not in results:
+            return None
+
         df.loc[len(df)] = ['0:COACH', 'COACH', 'Coach', '{} {}'.format(results['coach'][0]['firstName'], results['coach'][0]['lastName']), np.nan]
         for side in results['athletes']:
             if sides.get(side['position']):

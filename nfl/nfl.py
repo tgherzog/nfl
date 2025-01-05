@@ -202,6 +202,7 @@ class NFL():
         self.iteams_ = {}  # team name to id
         self.divs_   = {}
         self.confs_  = {}
+        self.rosters_ = {}
         self.games_  = []
         self.max_week = 0
         self.week = None
@@ -914,7 +915,10 @@ class NFL():
         team: team code
         '''
 
-        return self.engine.roster(self, team)
+        if team not in self.rosters_:
+            self.rosters_[team] = self.engine.roster(self, team)
+
+        return self.rosters_[team]
 
     def wlt(self, teams=None, within=None, limit=None):
         '''Return the wlt stats of one or more teams
