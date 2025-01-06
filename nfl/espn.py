@@ -256,7 +256,7 @@ class NFLSourceESPN(NFLSource):
         '''Return current scoreboard
         '''
 
-        df = pd.DataFrame(columns=['ateam','hteam','ascore','hscore','period','clock','status','down','fpos','broadcast'])
+        df = pd.DataFrame(columns=['ateam','hteam','ascore','hscore','state','period','clock','status','down','fpos','broadcast'])
         now = datetime.now()
         # url = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates={:04d}{:02d}{:02d}'
         # self.lasturl = url.format(now.year, now.month, now.day)
@@ -287,6 +287,8 @@ class NFLSourceESPN(NFLSource):
             df.loc[at, ['broadcast','down','fpos','period','clock']] = [game['broadcast'], '','','','']
             df.loc[at, 'status'] = game['status']['type']['detail'] # default
             status = game['status']['type']['state']
+            df.loc[at, 'state'] = 'live' if status == 'in' else status
+
             if status == 'in':
                 df.loc[at, ['period','clock']] = [game['status']['period'], game['status']['displayClock']]
                 if type(game.get('situation')) is dict:
@@ -310,7 +312,7 @@ class NFLSourceESPN(NFLSource):
                 gametime = pd.to_datetime(game['date']).astimezone(self.zone).replace(tzinfo=None)
                 df.loc[at, 'status'] = '{}/{} {:02d}:{:02d}'.format(gametime.month, gametime.day, gametime.hour, gametime.minute)
 
-        return NFLScoreboard(result['season']['year'], result['week']['number'], df)
+        return NFLScoreboard(nfl, result['season']['year'], result['week']['number'], df)
 
 
     def roster(self, nfl, code):

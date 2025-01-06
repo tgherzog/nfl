@@ -1553,26 +1553,39 @@ class NFLScoreboard():
             year        scoreboard year
             scoreboard  pandas DataFrame
     '''
-    week = None
-    year = None
-    scoreboard = None
 
-    def __init__(self, year, week, scoreboard):
+    def __init__(self, nfl, year, week, scoreboard):
+        self.nfl  = nfl
         self.year = year
         self.week = week
         self.scoreboard = scoreboard
 
     def __repr__(self):
         if type(self.scoreboard) is pd.DataFrame:
-            return 'Week {}\n'.format(self.week) + self.scoreboard.__repr__()
+            return 'Week {}\n'.format(self.week) + self.scoreboard.drop('state',axis=1).__repr__()
 
         return ''
 
     def _repr_html_(self):
         if type(self.scoreboard) is pd.DataFrame:
-            return '<h3>Week {}</h3>\n'.format(self.week) + self.scoreboard._repr_html_()
+            return '<h3>Week {}</h3>\n'.format(self.week) + self.scoreboard.drop('state',axis=1)._repr_html_()
 
         return ''
+
+    def __call__(self, teams=None, limit=None):
+        '''Return scoreboard for just the specified team(s).
+        '''
+
+        z = self.scoreboard
+        if teams:
+            teams = self.nfl._teams(teams)
+            z = z[z['ateam'].isin(teams) | z['hteam'].isin(teams)]
+        
+        if limit:
+            z = z[z['state']==limit]
+
+        return z.drop('state',axis=1)
+
         
 class NFLRoster():
     '''Contains a team roster
@@ -1639,6 +1652,11 @@ class NFLRoster():
         '''
 
         return set(self.roster['side'].unique())
+
+    def name(self, t):
+        '''Search roster by name or partial name
+        '''
+        return self.roster[self.roster['name'].str.contains(t, case=False)]
 
     def member(self, code):
         '''Name and jersey for the 1st roster member with the given code
