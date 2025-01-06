@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from .source import NFLSource
-from .nfl import NFLScoreboard, NFLRoster
+from .nfl import NFLScoreboard, NFLRoster, NFLPlaysFrame
 from .utils import safeInt, to_seconds, to_int_list, current_season
 
 class NFLSourceESPN(NFLSource):
@@ -233,7 +233,7 @@ class NFLSourceESPN(NFLSource):
             if not result.get('drives'):
                 return None         # future games have no drive data
 
-            df = pd.DataFrame(columns=['team', 'codes', 'period', 'clock', 'down', 'loc', 'yds', 'type', 'desc'])
+            df = NFLPlaysFrame(columns=['team', 'codes', 'period', 'clock', 'down', 'loc', 'yds', 'type', 'desc'])
             for drive in result['drives']['previous']:
                 for play in drive['plays']:
                     codes = 'S' if play['scoringPlay'] else ''

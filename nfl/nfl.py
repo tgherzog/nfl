@@ -84,6 +84,20 @@ class NFLTeam():
         return self.host.engine.boxscore(self.host, self.code, week)
 
     def plays(self, count=10, week=None):
+        '''Returns most recent plays from the specified game.
+
+           count:   number of most recent plays to return
+           week:    game week; otherwise, the current week
+
+           Note that the returned object is a DataFrame wrapper with an extra
+           function that lets you more easily read the play description, which
+           in the ordinary DataFrame view is typically truncated.
+
+           Examples:
+           nfl('MIN').plays() # return most recent plays
+           nfl('MIN').plays().desc() # print the description field from the most recent play
+           nfl('MIN').plays().desc(-5) # description from 5 plays back
+        '''
 
         if week is None:
             week = self.host.week
@@ -1587,6 +1601,18 @@ class NFLScoreboard():
         return z.drop('state',axis=1)
 
         
+class NFLPlaysFrame(pd.DataFrame):
+
+    def desc(self, pos=-1):
+        '''Return the description of a single row. Negative values are treated
+           as offsets (i.e. from the end of the frame) while non-negative values
+           are treated as ordinary keys
+        '''
+        if pos < 0:
+            return self.iloc[pos]['desc']
+
+        return self.loc[pos]['desc']
+
 class NFLRoster():
     '''Contains a team roster
     '''
