@@ -1,10 +1,8 @@
-#!/usr/local/bin/python
 
 import openpyxl
 import sys
 import logging
 import copy
-from docopt import docopt
 from datetime import datetime
 import numpy as np
 import pandas as pd
@@ -247,8 +245,7 @@ class NFL():
         if not engine:
             from .espn import NFLSourceESPN
             self.engine = NFLSourceESPN()
-        # elif type(engine) is str:
-        #     self.engine = getattr(sys.modules[__name__], engine)()
+
 
     def __call__(self, i):
 
@@ -405,7 +402,7 @@ class NFL():
 
         if stash:
             if type(stash) is not pd.DataFrame:
-                raise RuntimeError('object passed to restore() must be of type list')
+                raise RuntimeError('object passed to restore() must be a DataFrame')
 
             self.games_ = stash.copy()
             self.stats = None
@@ -560,11 +557,11 @@ class NFL():
             return value_map.get(x, x)
 
         # First argument can also be a series of scores or outcomes. Index must be a MultiIndex (week,team)
-        if type(wk) is pd.Series:
+        if isinstance(wk, pd.Series):
             for w in wk.index.get_level_values(0).unique():
                 self.set(w, reset, ordered, **wk.xs(w).to_dict())
 
-        elif type(wk) is dict:
+        elif isinstance(wk, dict):
             # deprecated
             for k,v in wk.items():
                 self.set(k, reset, ordered, **v)
@@ -633,7 +630,7 @@ class NFL():
         season = season or self.season
         z = self.gameFrame(teams, week, season)[['p']]
         z.loc[:] = False
-        self.games_.update(z.assign(season=season).reset_index().set_index(['season','id']))
+        self.games_.update(pd.concat({season: z}, names=['season']))
         self.stats = None
 
 
@@ -651,7 +648,7 @@ class NFL():
             z = z[z['wk'].isin(limit)]
 
         if teams:
-            teams = self._teams(teams)
+            teams = self._list(teams)
             z = z[z['ht'].isin(teams) | z['at'].isin(teams)]
 
         if not allGames:
@@ -735,12 +732,12 @@ class NFL():
             weeks = teams
             teams = teams2 = None
         else:
-            teams2 = self._teams(teams)
-            if type(teams) is str and len(teams2) > 1:
+            teams2 = self._list(teams)
+            if isinstance(teams, str) and len(teams2) > 1:
                 # This is so we differentiate between a division/conference name and a team code
                 teams = teams2
 
-        weeks2 = self._teams(weeks)
+        weeks2 = self._list(weeks)
 
         if by == 'game':
             games = self.gameFrame(teams=teams2, limit=weeks2, allGames=True, season=season).copy()
@@ -754,7 +751,7 @@ class NFL():
             if not ts:
                 df['date'] = df['date'].dt.strftime('%m/%d %H:%M')
 
-            if type(teams) in [str, NFLTeam] and type(weeks) is int:
+            if isinstance(teams, (str, NFLTeam)) and type(weeks) is int:
                 # need a special test here to make sure we have a data frame
                 if len(df) > 0:
                     return df.drop('week', axis=1).iloc[0]
@@ -793,11 +790,11 @@ class NFL():
         if not ts:
             df['date'] = df['date'].dt.strftime('%m/%d %H:%M')
 
-        if type(teams) is str and type(weeks) is int:
+        if isinstance(teams, str) and type(weeks) is int:
             return df.loc[(weeks,teams)]
-        elif type(teams) is str:
+        elif isinstance(teams, str):
             return df.xs(teams, level=1)
-        elif type(teams) is NFLTeam:
+        elif isinstance(teams, NFLTeam):
             return df.xs(teams.code, level=1)
         elif type(weeks) is int:
             return df.xs(weeks, level=0)
@@ -814,7 +811,7 @@ class NFL():
         if teams is None:
             raise ValueError("teams cannot be None here")
 
-        teams = self._teams(teams)
+        teams = self._list(teams)
 
         ops = {t:set() for t in teams}
 
@@ -873,8 +870,8 @@ class NFL():
         matrix: if True, returns the wlt frame and the games frame as a tuple
         '''
 
-        teams  = self._teams(teams)
-        within = self._teams(within)
+        teams  = self._list(teams)
+        within = self._list(within)
 
         cols = ['win','loss','tie', 'pct', 'scored','allowed']
 
@@ -948,7 +945,7 @@ class NFL():
         z = z.xs('pct', level=1, axis=1).sort_values(list(z.index), axis=1, ascending=False)
         '''
 
-        teams = self._teams(teams)
+        teams = self._list(teams)
         df = pd.DataFrame(columns=pd.MultiIndex.from_product([teams, ['win','loss','tie', 'pct']], names=['team','outcome']))
         common_opponents = self.opponents(teams)
         divisions = set()
@@ -1055,7 +1052,7 @@ class NFL():
            divRule   Enforce the "one-club-per-division" rule as stated in the wildcard
                      tiebreaking procedures
         '''
-        teams = list(self._teams(teams))
+        teams = list(self._list(teams))
         r = pd.Series(name='level')
 
         # shortcuts for efficiency: implement before call to _stats for speed
@@ -1261,27 +1258,32 @@ class NFL():
         return 'tie'
 
 
-    def _teams(self, teams):
-        ''' Transforms scalar values into arrays. Iterable objects are,
-            for the most part, returned unchanged. Scalar values are
-            returned as single-element arrays. Recognized conference and
-            division codes are returns as the corresponding list of team codes
+    def _list(self, teams):
+        '''Transforms objects into list-likes. This is designed so that
+           the user can pass objects or team/division/conference codes
+           as arguments to functions that expect lists of team codes or
+           week numbers
+
+           - None becomes None
+           - NFLTeam, NFLDivision and NFLConfeence objects become team code lists
+           - team/division/conference codes becomes team code lists
+           - other iterables (of any type) are cast to ordinary lists
         '''
 
         if teams is None:
             return None
 
-        if type(teams) in [pd.Series, pd.Index]:
+        if isinstance(teams, pd.core.base.IndexOpsMixin):
             # a list-like that needs to be cast
             return list(teams)
 
-        if type(teams) is NFLTeam:
+        if isinstance(teams, NFLTeam):
             return [teams.code]
 
-        if type(teams) in [NFLDivision, NFLConference]:
+        if isinstance(teams, (NFLDivision, NFLConference)):
             return list(teams.teams)
 
-        if type(teams) is not str and hasattr(teams, '__iter__'):
+        if not isinstance(teams, str) and hasattr(teams, '__iter__'):
             # assume no problems iterating
             return teams
 
@@ -1294,7 +1296,7 @@ class NFL():
             # conference code
             return self.confs_[teams]
 
-        # single team code
+        # single team code or integer
         return [teams]
 
     def scenarios(self, weeks, teams, spots=1, ties=True):
