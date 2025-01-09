@@ -13,7 +13,6 @@ from .utils import safeInt, to_seconds, to_int_list
 class NFLSourceProFootballRef(NFLSource):
 
     source = 'https://www.pro-football-reference.com/years/{}/games.htm'
-    name   = 'ProFootballRef'
 
     def teams(self, nfl):
         '''Generator must return: 
@@ -47,16 +46,12 @@ class NFLSourceProFootballRef(NFLSource):
                     }
 
     def games(self, nfl):
-        '''Generator must return:
-            week (int)
-            date (gametime as datetime)
-            ateam (code for away team)
-            hteam (code for home team)
-            ascore (int)
-            hscore (int)
+        '''Must return a pandas DataFrame with game information. See espn.py
+           for details
         '''
 
         url = self.source.format(nfl.year)
+        df = pd.DataFrame(columns=['seas', 'id', 'wk', 'ts', 'at', 'ht', 'as','hs'])
 
         try:
             d = PyQuery(url=url)('#all_games #games tbody > tr')
@@ -73,39 +68,31 @@ class NFLSourceProFootballRef(NFLSource):
             if type(week) is int:
                 acode = _code_from_url(PyQuery(elem)('td[data-stat="winner"] a').attr('href'))
                 hcode = _code_from_url(PyQuery(elem)('td[data-stat="loser"] a').attr('href'))
-                # aname  = rowval(elem, "winner")
-                # hname  = rowval(elem, "loser")
                 ascore = safeInt(rowval(elem, "pts_win"))
                 hscore = safeInt(rowval(elem, "pts_lose"))
-                if type(ascore) is not int: ascore = None
-                if type(hscore) is not int: hscore = None
-                game_date = rowval(elem, "game_date")
-                game_time = rowval(elem, "gametime")
-                game_date = datetime.strptime(game_date+game_time, "%Y-%m-%d%I:%M%p")
+                if type(ascore) is not int: ascore = np.nan
+                if type(hscore) is not int: hscore = np.nan
+                game_date = pd.to_datetime(' '.join([rowval(elem, "game_date"), rowval(elem, "gametime")]))
 
                 if rowval(elem, "game_location") != '@':
                     (acode,hcode) = (hcode,acode)
-                    # (aname,hname) = (hname,aname)
                     (ascore,hscore) = (hscore,ascore)
 
-                yield {
-                    'week': week,
-                    'date': game_date,
-                    'ateam': acode,
-                    'hteam': hcode,
-                    'ascore': ascore,
-                    'hscore': hscore,
-                }
+                gameid = '{:4d}{:02d}{:02d}0{}'.format(game_date.year, game_date.month, game_date.day, hcode.lower())
+                df.loc[len(df)] = ['reg', gameid, week, game_date, acode, hcode, ascore, hscore]
 
-    def boxscore(self, nfl, code, week):
+        return df
+
+
+    def boxscore(self, nfl, game):
         '''Return a dataframe of games stats for the specified week. None is returned for bye weeks
         '''
 
-        game = nfl.game(code, week)
-        if game:
+        if game is not None:
             ht = game['ht']
-            alt = nfl.teams_[ht]['alt'] or ht
-            code = '{}0{}'.format(datetime.strftime(game['ts'], '%Y%m%d'), alt.lower())
+            # alt = nfl.teams_[ht]['alt'] or ht
+            # code = '{}0{}'.format(datetime.strftime(game['ts'], '%Y%m%d'), alt.lower())
+            code = game.name
 
             setup = {
                 'head': ['week', 'opp', 'date','id'],
@@ -134,9 +121,9 @@ class NFLSourceProFootballRef(NFLSource):
             if not game['p']:
                 return df.dropna()
             
-            url = 'https://www.pro-football-reference.com/boxscores/{}.htm'.format(code)
-            d = PyQuery(url=url)
-            self.lasturl = url
+            self.lasturl = 'https://www.pro-football-reference.com/boxscores/{}.htm'.format(code)
+            d = PyQuery(url=self.lasturl)
+
 
             t = PyQuery(d)('table.linescore')
             quarters = [PyQuery(elem).text().lower() for elem in PyQuery(t)('thead th')][2:]

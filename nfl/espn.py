@@ -12,17 +12,12 @@ from .utils import safeInt, to_seconds, to_int_list, current_season
 class NFLSourceESPN(NFLSource):
 
     source = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates={:04d}{:02d}'
-    name   = 'ESPN'
 
     def __init__(self):
+        super().__init__()
         self.zone = tz.gettz('America/New_York')
         self.nettd_cache = {}
         self.nettd_gamecache = {}
-
-    def extra_fields(self, type):
-
-        if type == 'games':
-            return ['id']
 
     def teams(self, nfl):
         '''Generator must return: 
@@ -70,17 +65,24 @@ class NFLSourceESPN(NFLSource):
                         }
 
     def games(self, nfl):
-        '''Generator must return:
-            week (int)
-            date (gametime as datetime)
-            ateam (code for away team)
-            hteam (code for home team)
-            ascore (int)
-            hscore (int)
+        '''Must return a pandas DataFrame with game information, structured as follows:
+
+            columns = [season, gameid, week, date, ateam, hteam, ascore, hscore]
+
+                    season:         "pre", "reg" or "post"
+                    id:             unique game identifier, typically the identifer for future
+                                    game-specific API calls (e.g. boxscore, plays)
+                    week:           week number
+                    date:           pandas.timestamp
+                    ateam/hteam:    team identifiers: typically something like 'DAL'
+                    ascore/hscore:  final scores, or nan if game hasn't been completed yet
+
         '''
 
-        season_type = 2
-        (start,end) = self.season_dates(nfl.year, season_type)
+        season_types = {1: 'pre', 2: 'reg', 3: 'post'}
+        df = pd.DataFrame(columns=['seas', 'id', 'wk', 'ts', 'at', 'ht', 'as','hs'])
+
+        (start,end) = self.season_dates(nfl.year)
         first = start.floor(freq='D').replace(day=1)
         last  = end.floor(freq='D').replace(day=1)
 
@@ -89,31 +91,26 @@ class NFLSourceESPN(NFLSource):
             self.lasturl = self.source.format(d.year, d.month)
             result = requests.get(self.lasturl).json()
             for elem in result['events']:
-                if elem['season']['type'] == season_type:
+                season = season_types.get(elem['season']['type'],'na')
 
-                    (hteam,ateam) = elem['competitions'][0]['competitors']
-                    if hteam['homeAway'] != 'home':
-                        (hteam,ateam) = (ateam,hteam)
+                (hteam,ateam) = elem['competitions'][0]['competitors']
+                if hteam['homeAway'] != 'home':
+                    (hteam,ateam) = (ateam,hteam)
 
-                    if elem['competitions'][0]['status']['type']['completed']:
-                        ascore = safeInt(ateam['score'])
-                        hscore = safeInt(hteam['score'])
-                    else:
-                        ascore = hscore = None
+                if elem['competitions'][0]['status']['type']['completed']:
+                    ascore = safeInt(ateam['score'])
+                    hscore = safeInt(hteam['score'])
+                else:
+                    ascore = hscore = np.nan
 
-                    yield {
-                        'week': elem['week']['number'],
-                        'date': self.to_datetime(elem['date']),
-                        'ateam': ateam['team']['abbreviation'],
-                        'hteam': hteam['team']['abbreviation'],
-                        'ascore': ascore,
-                        'hscore': hscore,
-                        'id': elem['id']
-                    }
+                df.loc[len(df)] = [season, elem['id'], elem['week']['number'], self.to_datetime(elem['date']),
+                    ateam['team']['abbreviation'], hteam['team']['abbreviation'], ascore, hscore]
 
             d += pd.DateOffset(months=1)
 
-    def boxscore(self, nfl, code, week):
+        return df
+
+    def boxscore(self, nfl, game):
 
         def team_stats(t):
 
@@ -124,9 +121,8 @@ class NFLSourceESPN(NFLSource):
 
             return z
 
-        game = nfl.game(code, week)
-        if game:
-            result = self.gameinfo(game['id'])
+        if game is not None:
+            result = self.gameinfo(game.name)
 
             setup = {
                 'head': ['week', 'opp', 'date', 'event'],
@@ -149,7 +145,7 @@ class NFLSourceESPN(NFLSource):
             df.loc[('head','week'), :] = game['wk']
             df.loc[('head','opp'), :] = [game['ht'], game['at']]
             df.loc[('head','date'), :] = datetime.strftime(game['ts'], '%Y-%m-%d')
-            df.loc[('head','event'), :] = game['id']
+            df.loc[('head','event'), :] = game.name
 
             if not game['p']:
                 return df.dropna()
@@ -224,11 +220,10 @@ class NFLSourceESPN(NFLSource):
 
             return df
 
-    def plays(self, nfl, code, week, count):
+    def plays(self, nfl, game, count):
 
-        game = nfl.game(code, week)
-        if game:
-            result = self.gameinfo(game['id'])
+        if game is not None:
+            result = self.gameinfo(game.name)
 
             if not result.get('drives'):
                 return None         # future games have no drive data
@@ -355,7 +350,7 @@ class NFLSourceESPN(NFLSource):
         td = {k:0 for k in api_teams}
 
         if len(api_teams) > 0:
-            for game in nfl.games(api_teams):
+            for game in nfl.games(api_teams, season='reg'):
                 if game['id'] in self.nettd_gamecache:
                     tds = self.nettd_gamecache[game['id']]
                 else:
@@ -389,11 +384,11 @@ class NFLSourceESPN(NFLSource):
         '''
         return pd.to_datetime(date).to_pydatetime().astimezone(self.zone).replace(tzinfo=None)
 
-    def season_dates(self, year, type=2):
+    def season_dates(self, year):
         '''Returns span for a season (regular season = 2) as pandas datetimes
         '''
 
-        url = 'https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/seasons/{}/types/{}'.format(year, type)
+        url = 'https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/seasons/{}'.format(year)
         result = requests.get(url).json()
         return (pd.to_datetime(result['startDate']), pd.to_datetime(result['endDate']))
 

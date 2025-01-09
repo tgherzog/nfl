@@ -1,8 +1,13 @@
 
 class NFLSource():
-    lasturl = None
+    '''Base class for NFL data source. This class must implement the games() and teams()
+       functions at a minimum to be useful. More details in espn.py
+    '''
 
-    def boxscore(self, nfl, code, week):
+    def __init__(self):
+        self.lasturl = None
+
+    def boxscore(self, nfl, game):
         '''Return box score as a data frame
         '''
 
@@ -32,6 +37,3 @@ class NFLSource():
 
         raise NotImplementedError('{} does not implement net touchdowns'.format(self.__class__.__name__))
 
-    def extra_fields(self, type):
-        '''Return extra field names requested by this source. These will be stored in the games database
-        '''

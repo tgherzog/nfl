@@ -25,6 +25,7 @@ class NFLTeam():
        conf: conference code
     '''
 
+
     def __init__(self, code, host):
 
         elem = host.teams_[code]
@@ -61,29 +62,36 @@ class NFLTeam():
         return self.host.schedule(self.code, by='team')
 
     @property
-    def opponents(self):
-        '''Team opponents (from its schedule)
-        '''
-
-        return self.host.opponents(self.code)
-
-    @property
     def roster(self):
         '''Team roster
         '''
         return self.host.roster(self.code)
 
-    def boxscore(self, week=None):
+    @property
+    def active_game(self):
+        '''Returns the most recently active game, if any
+        '''
+
+        z = self.host.games_
+        z = z[((z['at']==self.code) | (z['ht']==self.code)) & (z['ts'] < datetime.now())]
+        if len(z) > 0:
+            return z.droplevel(0).iloc[-1]
+
+
+    def boxscore(self, week=None, season=None):
         '''Boxscore stats for the game played in the specified week. If week=None
            return the current week from the nfl object
         '''
 
-        if week is None:
-            week = self.host.week
+        if week:
+            game = self.host.game(self.code, week, season)
+        else:
+            game = self.active_game
 
-        return self.host.engine.boxscore(self.host, self.code, week)
+        if game is not None:
+            return self.host.engine.boxscore(self.host, game)
 
-    def plays(self, count=10, week=None):
+    def plays(self, count=10, week=None, season=None):
         '''Returns most recent plays from the specified game.
 
            count:   number of most recent plays to return
@@ -99,10 +107,13 @@ class NFLTeam():
            nfl('MIN').plays().desc(-5) # description from 5 plays back
         '''
 
-        if week is None:
-            week = self.host.week
+        if week:
+            game = self.host.game(self.code, week, season)
+        else:
+            game = self.active_game
 
-        return self.host.engine.plays(self.host, self.code, week, count)
+        if game is not None:
+            return self.host.engine.plays(self.host, game, count)
 
     def __repr__(self):
         wk = self.host.week or 1
@@ -200,6 +211,9 @@ class NFL():
        year      Current season. In theory this can be changed work with a previous
                  season, although that's API independent and hasn't really been tested
 
+       season    'pre', 'reg', or 'post' with a default of 'reg'. This is the default
+                 value for season-specific functions like schedule, wlt and set/clear. 
+
        engine    API engine. The ESPN engine is the most robust, but others are
                  available or could be written
 
@@ -211,17 +225,17 @@ class NFL():
                        needed, so leave it set to False in most situations
     '''
 
-    def __init__(self, year=None, engine=None):
+    def __init__(self, year=None, season=None, engine=None):
         self.teams_  = {}
-        self.iteams_ = {}  # team name to id
         self.divs_   = {}
         self.confs_  = {}
         self.rosters_ = {}
-        self.games_  = []
-        self.max_week = 0
+        self.seasons_ = {}
+        self.games_  = None
         self.week = None
         self.stats = None
         self.year = year
+        self.season = season or 'reg'
         self.engine = engine
         self.stash_ = None
         self.autoUpdate = True
@@ -254,132 +268,43 @@ class NFL():
         # in case of reload
         self.path   = path
         self.teams_ = {}
-        self.games_ = []
-        self.max_week = 0
+        self.games_ = None
 
-        wb = openpyxl.load_workbook(path, read_only=True)
+        with pd.ExcelFile(path) as reader:
+            self.teams_ = pd.read_excel(reader, sheet_name='teams', index_col=0).to_dict(orient='index')
+            self.games_ = pd.read_excel(reader, sheet_name='games', index_col=[0,1])
+            meta = pd.read_excel(reader, sheet_name='meta', index_col=0)
 
-        engine = wb['meta'].cell(row=2, column=2).value
-        year   = wb['meta'].cell(row=3, column=2).value
-        if not self.year:
-            self.year = year
+        self.year = meta.loc['Year', 'value']
 
-        if self.engine.name != engine:
-            self.engine = _engine(engine)
-
-        for row in wb['teams']:
-            key = row[0].value
-            name = row[1].value
-            div = row[2].value
-            conf = div.split('-')[0]
-            if key and name and conf and div:
-                self.teams_[key] = {'name': name, 'conf': conf, 'div': div}
-
-                if self.divs_.get(div) is None:
-                    self.divs_[div] = set()
-
-                if self.confs_.get(conf) is None:
-                    self.confs_[conf] = set()
-
-                self.divs_[div].add(key)
-                self.confs_[conf].add(key)
-
-        self.iteams_ = {v['name']:k for k,v in self.teams_.items()}
-
-        custom_fields = self.engine.extra_fields('games') or []
-        custom_field_offset = 6
-
-        for row in wb['games']:
-            if row[0].row > 1 and row[0].value:
-                # at/ht = away team/home team - same for scores
-                game = {'wk': row[0].value,
-                    'at': row[1].value,
-                    'as': row[2].value if row[2].value is not None else np.nan,
-                    'ht': row[3].value,
-                    'hs': row[4].value if row[4].value is not None else np.nan,
-                    'ts': row[5].value
-                }
-
-                game['p'] = game['as'] is not np.nan and game['hs'] is not np.nan
-
-                n = custom_field_offset
-                for x in custom_fields:
-                    game[x] = row[n].value
-                    n += 1
-
-                self.games_.append(game)
-                self.max_week = max(self.max_week, game['wk'])
+        key = meta.loc['Engine', 'value'].split('.')
+        engine = getattr(sys.modules['.'.join(key[:-1])], key[-1])
+        self.engine = engine()
 
         # resets and housecleaning
-        self.infer_week()
-        self.stats = None
-
+        self._post_load()
         return self
-
-
-    def infer_week(self):
-        if not self.week:
-            # assumes games are sorted chronologically
-            now = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            weekends = {}
-            for row in self.games_:
-                t = row['ts'].replace(hour=0, minute=0, second=0, microsecond=0)
-                weekends[row['wk']] = max(weekends.get(row['wk'], datetime.min), t)
-                if t <= now:
-                    self.week = row['wk']
-
-            if self.week and self.week < self.max_week and now > weekends[self.week]:
-                # if between weeks, go to the next week
-                self.week += 1
-
 
     def save(self, path):
         '''Save data to the specified Excel file
         '''
 
-        wb = openpyxl.Workbook()
-        wb[wb.sheetnames[0]].title = 'teams'
-        wb.create_sheet('games')
-        wb.create_sheet('meta')
+        teams = pd.DataFrame(columns=['code','name','conf','div']).set_index('code')
+        meta  = pd.DataFrame(columns=['key', 'value']).set_index('key')
 
-        ws = wb['teams']
-        row = 1
         for key,team in self.teams_.items():
-            ws.cell(row=row, column=1).value = key
-            ws.cell(row=row, column=2).value = team['name']
-            ws.cell(row=row, column=3).value = team['div']
-            row += 1
+            teams.loc[key, :] = [team['name'], team['conf'], team['div']]
 
-        ws = wb['games']
-        hdr = ['wk', 'at', 'as', 'ht', 'hs', 'ts'] + (self.engine.extra_fields('games') or [])
-        col = 1
-        for elem in hdr:
-            ws.cell(row=1, column=col).value = elem
-            col += 1
+        meta.loc['Last Updated', 'value'] = datetime.now()
+        meta.loc['Engine', 'value'] = '.'.join([self.engine.__class__.__module__, self.engine.__class__.__name__])
+        meta.loc['Year', 'value'] = self.year
 
-        row = 2
-        for game in self.games_:
-            col = 1
-            for elem in hdr:
-                ws.cell(row=row, column=col).value = game[elem]
-                col += 1
+        with pd.ExcelWriter(path) as writer:
+            teams.to_excel(writer, sheet_name='teams')
+            self.games_.to_excel(writer, sheet_name='games')
+            meta.to_excel(writer, sheet_name='meta')
 
-            row += 1
-
-        ws = wb['meta']
-        ws.cell(row=1, column=1).value = 'Last Updated'
-        ws.cell(row=2, column=1).value = 'Engine'
-        ws.cell(row=3, column=1).value = 'Season'
-
-        ws.cell(row=1, column=2).value = datetime.now()
-        ws.cell(row=2, column=2).value = self.engine.name
-        ws.cell(row=3, column=2).value = self.year
-
-        wb.save(path)
         self.path = path
-
-    def teamid(self, name):
-        return self.iteams_.get(name)
 
     def _stats(self):
         '''Return the master statistics table, building it first if necessary. Teams are ordered by conference,
@@ -402,9 +327,10 @@ class NFL():
 
         # special dataframe of game info to streamline processing. Contains 2 rows per game for
         # outcomes from each team's perspective. Perhaps someday this would be useful elsewhere
-        games = pd.DataFrame(index=range(len(self.games_)*2), columns=['week','team','opp','wlt', 'scored', 'allowed'])
+        reg_season = self.games_.xs('reg')
+        games = pd.DataFrame(index=range(len(reg_season)*2), columns=['week','team','opp','wlt', 'scored', 'allowed'])
         z = 0
-        for game in self.games_:
+        for (_,game) in reg_season.iterrows():
             if game['p']:
                 games.loc[z]   = [game['wk'], game['ht'], game['at'], NFL.result(game['hs'], game['as']), game['hs'], game['as']]
                 games.loc[z+1] = [game['wk'], game['at'], game['ht'], NFL.result(game['as'], game['hs']), game['as'], game['hs']]
@@ -465,7 +391,7 @@ class NFL():
         if len(self.games_) == 0:
             raise RuntimeError('game data has not yet been updated or loaded')
 
-        stash_ = copy.deepcopy(self.games_)
+        stash_ = self.games_.copy()
         if inplace:
             self.stash_ = stash_
             return
@@ -478,17 +404,17 @@ class NFL():
         '''
 
         if stash:
-            if type(stash) is not list:
+            if type(stash) is not pd.DataFrame:
                 raise RuntimeError('object passed to restore() must be of type list')
 
-            self.games_ = copy.deepcopy(stash)
+            self.games_ = stash.copy()
             self.stats = None
             return
 
-        if type(self.stash_) is not list:
+        if type(self.stash_) is not pd.DataFrame:
             raise RuntimeError('game data has not been previously stashed')
 
-        self.games_ = copy.deepcopy(self.stash_)
+        self.games_ = self.stash_.copy()
         self.stats = None
 
     def update(self):
@@ -498,8 +424,7 @@ class NFL():
         self.teams_ = {}
         self.divs_  = {}
         self.confs_ = {}
-        self.games_ = []
-        self.max_week = 0
+        self.games_ = None
 
         for elem in self.engine.teams(self):
             key = elem['key']
@@ -521,33 +446,42 @@ class NFL():
             self.divs_[div].add(key)
             self.confs_[conf].add(key)
 
-        self.iteams_ = {v['name']:k for k,v in self.teams_.items()}
+        # engine returns a flat dataframe
+        g = self.engine.games(self)
+        g['p'] = (g['hs'].isna()==False) & (g['as'].isna()==False)
 
-        required_keys = ['week', 'ateam', 'ascore', 'hteam', 'hscore', 'date']
-        for elem in self.engine.games(self):
-            game = {
-                'wk': elem['week'],
-                'at': elem['ateam'],
-                'as': elem['ascore'] if elem['ascore'] is not None else np.nan,
-                'ht': elem['hteam'],
-                'hs': elem['hscore'] if elem['hscore'] is not None else np.nan,
-                'ts': elem['date']
-            }
-
-            game['p'] = game['hs'] is not np.nan and game['as'] is not np.nan
-
-            for k,v in elem.items():
-                if k not in required_keys:
-                    game[k] = v
-
-            self.games_.append(game)
-            self.max_week = max(self.max_week, game['wk'])
-
-        # resets and housecleaning
-        self.games_ = sorted(self.games_, key=lambda x: x['ts'])
-        self.infer_week()
-        self.stats = None
+        # convert nans to 0's so we can set column type to int
+        g[['as','hs']] = g[['as','hs']].fillna(0).astype('int64')
+        self.games_ = g.sort_values('ts').set_index(['seas', 'id'])
+        self._post_load()
         return self
+
+    def _post_load(self):
+        '''Perform cleanup operations after an update or load
+        '''
+
+        self.seasons_ = {}
+        teams = set(self.teams_.keys())
+        for s in self.games_.index.get_level_values(0).unique():
+            df = self.games_.xs(s)
+            t = set(df['at'].unique()) | set(df['ht'].unique())
+            self.seasons_[s] = t & teams
+
+        if not self.week:
+            # assumes games are sorted chronologically
+            now = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            weekends = {}
+            for (_,row) in self.games_.xs('reg').iterrows():
+                t = row['ts'].replace(hour=0, minute=0, second=0, microsecond=0)
+                weekends[row['wk']] = max(weekends.get(row['wk'], datetime.min), t)
+                if t <= now:
+                    self.week = row['wk']
+
+            if self.week and self.week < max(self.weeks('reg')) and now > weekends[self.week]:
+                # if between weeks, go to the next week
+                self.week += 1
+
+        self.stats = None
 
     @property
     def scoreboard(self):
@@ -575,7 +509,7 @@ class NFL():
 
         return NFLConference('AFC', self)
 
-    def set(self, wk, reset=True, ordered=False, **kwargs):
+    def set(self, wk, overwrite=True, ordered=False, season=None, **kwargs):
         ''' Set the final score(s) for games and weeks. You can use this to create
             hypothetical outcomes and analyze the effect on team rankings. Scores
             are specified by team code and applied to the specified week's schedule.
@@ -583,7 +517,7 @@ class NFL():
             team is assumed to be zero if not previously set.
 
             wk:         week number or list-like of weeks
-            reset:      overwrite previously set scores
+            overwrite:  overwrite previously set scores
             ordered:    scores specify outcomes only in order of priority
             **kwargs    dict of team codes and scores
 
@@ -641,14 +575,14 @@ class NFL():
             wk = [wk]
 
         teams = kwargs.keys()
+        season = season or self.season
         inv = {0: 1, 1: 0, -1: 0}
 
-        # in reset mode, the function overwrites any previously set scores
-        for elem in self.games_:
-            if elem['wk'] not in wk:
+        for (k,elem) in self.games_.iterrows():
+            if k[0] != season or elem['wk'] not in wk:
                 continue
 
-            if elem['p'] and not reset:
+            if elem['p'] and not overwrite:
                 continue
 
             (ht,at) = (elem['ht'],elem['at'])
@@ -657,44 +591,38 @@ class NFL():
                     for k,v in kwargs.items():
                         v = _v(v)
                         if k == ht:
-                            elem['hs'] = max(v, 0)
-                            elem['as'] = 1 if v == 0 else 0
-                            elem['p'] = True
+                            self.games_.loc[k, ['hs', 'as', 'p']] = [max(v,0), 1 if v==0 else 0, True]
                             break
                         elif k == at:
-                            elem['as'] = max(v, 0)
-                            elem['hs'] = 1 if v == 0 else 0
-                            elem['p'] = True
+                            self.games_.loc[k, ['as', 'hs', 'p']] = [max(v,0), 1 if v==0 else 0, True]
                             break
 
             elif ht in teams and at in teams:
-                elem['hs'] = max(_v(kwargs[ht]),0)
-                elem['as'] = max(_v(kwargs[at]),0)
-                elem['p'] = True
+                self.games_.loc[k, ['hs', 'as', 'p']] = [max(_v(kwargs[ht]),0), max(_v(kwargs[at]),0), True]
 
             elif ht in teams:
                 v = _v(kwargs[ht])
-                elem['hs'] = max(v,0)
+                hscore = max(v,0)
                 if v < 0:
-                    elem['as'] = elem['hs']     # signal a tie
+                    ascore = hscore
                 else:
-                    elem['as'] = 0 if elem['hs'] > 0 else 1
+                    ascore = 0 if hscore > 0 else 1
 
-                elem['p'] = True
+                self.games_.loc[k, ['hs', 'as', 'p']] = [hscore, ascore, True]
 
             elif at in teams:
                 v = _v(kwargs[at])
-                elem['as'] = max(v,0)
+                ascore = max(v,0)
                 if v < 0:
-                    elem['hs'] = elem['as']
+                    hscore = ascore
                 else:
-                    elem['hs'] = 0 if elem['as'] > 0 else 1
+                    hscore = 0 if ascore > 0 else 1
 
-                elem['p'] = True
+                self.games_.loc[k, ['hs', 'as', 'p']] = [hscore, ascore, True]
 
         self.stats = None # signal to rebuild stats
 
-    def clear(self, week, teams=None):
+    def clear(self, week, teams=None, season=None):
         '''Clear scores for a given week or weeks
 
         week:   can be an integer, range or list-like. Pass None to clear all (for whatever reason)
@@ -702,91 +630,59 @@ class NFL():
         teams:  limit operation to games for specified teams (list-like)
         '''
 
-        if type(week) is int:
-            week = [week]
-
-        for elem in self.games_:
-            if week is None or elem['wk'] in week:
-                if teams is None or elem['ht'] in teams or elem['at'] in teams:
-                    elem['p'] = False
-                    elem['hs'] = elem['as'] = np.nan
-
+        season = season or self.season
+        z = self.gameFrame(teams, week, season)[['p']]
+        z.loc[:] = False
+        self.games_.update(z.assign(season=season).reset_index().set_index(['season','id']))
         self.stats = None
 
 
-    def games(self, teams=None, limit=None, allGames=False):
-        ''' generator to iterate over score data
-
-            teams:      code or list-like of teams to fetch
-
-            limit:      range or list-like of weeks to fetch. Integers are converted
-                        to the top limit of a range
-
-            Example:
-
-                for score in scores('MIN', limit=10) # fetch Vikings record up to but not including week 10
+    def gameFrame(self, teams=None, limit=None, allGames=False, season=None):
+        '''Returns raw game data as a DataFrame. This is mostly used internally.
         '''
+
+        season = season or self.season
 
         if type(limit) is int:
             limit = range(limit, limit+1)
 
-        if limit is None:
-            max_week = 25
-        else:
-            max_week = max(limit)
+        z = self.games_.xs(season)
+        if limit:
+            z = z[z['wk'].isin(limit)]
 
-        teams = self._teams(teams)
-
-        for elem in self.games_:
-            if elem['wk'] > max_week:   # optimization for single-week or single-game searches
-                break
-
-            if limit is None or elem['wk'] in limit:
-                if teams is None or elem['at'] in teams or elem['ht'] in teams:
-                    if elem['p'] or allGames:
-                        yield elem
-
-
-    def game(self, team, week):
-        ''' return a single game for the given team and week 
-        '''
-
-        for elem in self.games(team, week, allGames=True):
-            return elem
-
-
-    def scores(self, teams=None, limit=None):
-        ''' Returns interated game data structured by teams
-
-            Result is  dict keyed by team code each of game results as follows:
-
-            [wlt, us, them, op, home, week]
-
-            wlt:  'win' 'loss' or 'tie'
-            us:   our final score
-            them: their final score
-            op:   opponent (team code)
-            home: True for home games
-            week: week number
-        '''
-
-        if teams is None:
-            z = {i:[] for i in self.teams_.keys()}
-        else:
+        if teams:
             teams = self._teams(teams)
-            z = {i:[] for i in teams}
+            z = z[z['ht'].isin(teams) | z['at'].isin(teams)]
 
-        for game in self.games(teams, limit):
-            if teams is None or game['at'] in teams:
-                z[game['at']].append([NFL.result(game['as'], game['hs']), game['as'], game['hs'], game['ht'], False, game['wk']])
-
-            if teams is None or game['ht'] in teams:
-                z[game['ht']].append([NFL.result(game['hs'], game['as']), game['hs'], game['as'], game['at'], True, game['wk']])
+        if not allGames:
+            z = z[z['p']]
 
         return z
 
+    def games(self, teams=None, limit=None, allGames=False, season=None):
+        '''Iterate over the game database, returning a series
+        '''
 
-    def schedule(self, teams=None, weeks=None, by='game', ts=False):
+        for (_,game) in self.gameFrame(teams, limit, allGames, season).iterrows():
+            if game['p'] == False:
+                game['as'] = game['hs'] = np.nan
+
+            yield game
+
+    def game(self, team, week, season=None):
+        ''' return a single game for the given team and week 
+        '''
+
+        for game in self.games(team, week, allGames=True, season=season):
+            return game
+
+    def weeks(self, season=None):
+        '''Returns a list of unique weeks for the specified season
+        '''
+        season = season or self.season
+        return list(self.games_.xs(season)['wk'].unique())
+
+    def schedule(self, teams=None, weeks=None, by='game', season=None, ts=False):
         ''' Return schedule for a week or team. If a single week and
         team are requested the result is a Series. If multiple weeks/teams
         are requested the result is a DataFrame, Multiple weeks and teams
@@ -833,6 +729,7 @@ class NFL():
 
             return '{}/{} {:02d}:{:02d}'.format(obj.month, obj.day, obj.hour, obj.minute)
 
+        season = season or self.season
         if type(teams) is int and weeks is None:
             # special sugar: interpret first argument as a single week
             weeks = teams
@@ -846,9 +743,16 @@ class NFL():
         weeks2 = self._teams(weeks)
 
         if by == 'game':
-            df = pd.DataFrame(columns=['week', 'hteam', 'ateam', 'hscore', 'ascore', 'date'])
-            for game in self.games(teams=teams2, limit=weeks2, allGames=True):
-                df.loc[len(df)] = [game['wk'], game['ht'], game['at'], game['hs'], game['as'], to_date(game['ts'])]
+            games = self.gameFrame(teams=teams2, limit=weeks2, allGames=True, season=season).copy()
+            df = games.rename({ 'wk': 'week', 'ht': 'hteam', 'at': 'ateam', 'hs': 'hscore', 'as': 'ascore', 'ts': 'date'}, axis=1)
+
+            if (df['p']==False).any():
+                # this assignment will change dtype to float64, so only do it if necessary
+                df.loc[df['p']==False, ['ascore', 'hscore']] = np.nan
+
+            df = df[['week', 'hteam', 'ateam', 'hscore', 'ascore', 'date']]
+            if not ts:
+                df['date'] = df['date'].dt.strftime('%m/%d %H:%M')
 
             if type(teams) in [str, NFLTeam] and type(weeks) is int:
                 # need a special test here to make sure we have a data frame
@@ -864,21 +768,30 @@ class NFL():
             return df.set_index(['week', 'hteam'])
 
         if teams2 is None:
-            teams2 = list(self.teams_.keys())
+            teams2 = list(self.seasons_[season])
+            teams2.sort()
+        elif set(teams2) - self.seasons_[season]:
+            # this might occur if they select teams that aren't in the playoffs
+            teams2 = list(set(teams2) & self.seasons_[season])
             teams2.sort()
 
         # Here we construct the database index in advance so that it includes empty
         # rows for teams with bye weeks
         if weeks2 is None:
-            weeks2 = range(1, self.max_week+1)
+            weeks2 = self.weeks(season)
 
-        df = pd.DataFrame(index=pd.MultiIndex.from_product([weeks2, teams2], names=['week', 'team']), columns=['opp', 'loc', 'score', 'opp_score', 'wlt', 'date'])
-        for game in self.games(teams=teams2, limit=weeks2, allGames=True):
+        df = pd.DataFrame(index=pd.MultiIndex.from_product([weeks2, teams2], names=['week', 'team']),
+                columns=['opp', 'loc', 'score', 'opp_score', 'wlt', 'date'])
+        for game in self.games(teams=teams2, limit=weeks2, allGames=True, season=season):
             if game['ht'] in teams2:
-                df.loc[(game['wk'],game['ht'])] = [game['at'], 'home', game['hs'], game['as'], NFL.result(game['hs'], game['as']), to_date(game['ts'])]
+                df.loc[(game['wk'],game['ht'])] = [game['at'], 'home', game['hs'], game['as'], NFL.result(game['hs'], game['as']), game['ts']]
             
             if game['at'] in teams2:
-                df.loc[(game['wk'],game['at'])] = [game['ht'], 'away', game['as'], game['hs'], NFL.result(game['as'], game['hs']), to_date(game['ts'])]
+                df.loc[(game['wk'],game['at'])] = [game['ht'], 'away', game['as'], game['hs'], NFL.result(game['as'], game['hs']), game['ts']]
+
+        df['date'] = df['date'].astype('datetime64[ns]')
+        if not ts:
+            df['date'] = df['date'].dt.strftime('%m/%d %H:%M')
 
         if type(teams) is str and type(weeks) is int:
             return df.loc[(weeks,teams)]
@@ -892,7 +805,7 @@ class NFL():
         return df
 
 
-    def opponents(self, teams, limit=None):
+    def opponents(self, teams, limit=None, allGames=False, season=None):
         ''' Returns the set of common opponents of one or more teams
 
             The teams argument can be a single team or a list.
@@ -905,7 +818,7 @@ class NFL():
 
         ops = {t:set() for t in teams}
 
-        for game in self.games(teams, limit):
+        for game in self.games(teams, limit, allGames=allGames, season=season):
             if game['ht'] in ops:
                 ops[game['ht']].add(game['at'])
 
@@ -934,7 +847,7 @@ class NFL():
 
         return self.rosters_[team]
 
-    def wlt(self, teams=None, within=None, limit=None):
+    def wlt(self, teams=None, within=None, limit=None, season=None):
         '''Return the wlt stats of one or more teams
 
         teams:  team code or list of team codes
@@ -942,17 +855,17 @@ class NFL():
         within: list of team codes that defines the wlt universe
         '''
 
-        return self._wlt(teams=teams, within=within, limit=limit)[0].drop(['scored','allowed'], axis=1)
+        return self._wlt(teams=teams, within=within, limit=limit, season=season)[0].drop(['scored','allowed'], axis=1)
 
-    def matrix(self, teams=None, limit=None, allGames=False):
+    def matrix(self, teams=None, limit=None, allGames=False, season=None):
         '''Return a matrix of teams and the number of games played against each other
         '''
 
-        return self._wlt(teams, limit=limit, allGames=allGames)[1]
+        return self._wlt(teams, limit=limit, allGames=allGames, season=season)[1]
 
 
-    def _wlt(self, teams=None, within=None, limit=None, allGames=False):
-        ''' Internal function for calculating wlt from games database with
+    def _wlt(self, teams=None, within=None, limit=None, allGames=False, season=None):
+        ''' Internal function for calculating wlt from games database
         options to calculate ancillary data.
 
         points: include columns for points scored and allowed
@@ -960,7 +873,8 @@ class NFL():
         matrix: if True, returns the wlt frame and the games frame as a tuple
         '''
 
-        teams = self._teams(teams)
+        teams  = self._teams(teams)
+        within = self._teams(within)
 
         cols = ['win','loss','tie', 'pct', 'scored','allowed']
 
@@ -970,12 +884,11 @@ class NFL():
         df.index.name = 'team'
 
         # define a matrix of games played against opponents
-        m = pd.DataFrame(index=list(teams), columns=list(teams))
-        m[m.columns] = 0
+        m = pd.DataFrame(0, index=list(teams), columns=list(teams))
         for t in teams:
             m.loc[t, t] = np.nan
 
-        for game in self.games(teams, limit, allGames):
+        for game in self.games(teams, limit, allGames=allGames, season=season):
             if game['ht'] in teams and (within is None or game['at'] in within):
                 z = NFL.result(game['hs'], game['as'])
                 if z:
@@ -1075,8 +988,8 @@ class NFL():
         if self.netTouchdowns:
             df.loc['net-touchdowns'] = np.nan
 
-        (h2h,gm) = self._wlt(teams, within=teams)
-        co  = self._wlt(teams, within=common_opponents)[0]
+        (h2h,gm) = self._wlt(teams, within=teams, season='reg')
+        co  = self._wlt(teams, within=common_opponents, season='reg')[0]
 
         for team in teams:
             df.loc['overall', team] = stats.loc[team,'overall'].values
@@ -1154,7 +1067,7 @@ class NFL():
         elif fast:
             # if only care about the winner, try to first discern based on overall pct
             if self.stats is None:
-                z = self.wlt(teams)['pct']
+                z = self.wlt(teams, season='reg')['pct']
             else:
                 z = self.stats.loc[teams,('overall','pct')]
                 
@@ -1439,12 +1352,18 @@ class NFL():
 
     @staticmethod
     def _engine(name):
+        return getattr(sys.modules[__name__], name)()
+
         if name == 'ProFootballRef':
             return NFLSourceProFootballRef()
         elif name == 'ESPN':
             return NFLSourceESPN()
 
         raise ValueError('Unrecognized engine: {}'.format(name))
+
+    @staticmethod
+    def _name():
+        return (__name__,globals())
 
 
 class NFLScenarioMaker():
