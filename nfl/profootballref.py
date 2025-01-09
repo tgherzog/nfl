@@ -45,10 +45,15 @@ class NFLSourceProFootballRef(NFLSource):
                         'div': div
                     }
 
-    def games(self, nfl):
+    def games(self, nfl, season=None):
         '''Must return a pandas DataFrame with game information. See espn.py
            for details
+
+           This implementation does not support pre- or post-season games
         '''
+
+        if season and season != 'reg':
+            raise NotImplementedError('{} does not support pre-season or post-season schedules'.format(self.__class__.__name__))
 
         url = self.source.format(nfl.year)
         df = pd.DataFrame(columns=['seas', 'id', 'wk', 'ts', 'at', 'ht', 'as','hs'])

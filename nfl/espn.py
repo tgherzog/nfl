@@ -64,12 +64,12 @@ class NFLSourceESPN(NFLSource):
                             'div': div_name
                         }
 
-    def games(self, nfl):
+    def games(self, nfl, season=None):
         '''Must return a pandas DataFrame with game information, structured as follows:
 
             columns = [season, gameid, week, date, ateam, hteam, ascore, hscore]
 
-                    season:         "pre", "reg" or "post"
+                    season:         "pre", "reg" or "post" - or None for all of them
                     id:             unique game identifier, typically the identifer for future
                                     game-specific API calls (e.g. boxscore, plays)
                     week:           week number
@@ -91,7 +91,9 @@ class NFLSourceESPN(NFLSource):
             self.lasturl = self.source.format(d.year, d.month)
             result = requests.get(self.lasturl).json()
             for elem in result['events']:
-                season = season_types.get(elem['season']['type'],'na')
+                seas = season_types.get(elem['season']['type'],'na')
+                if season and season != seas:
+                    continue
 
                 (hteam,ateam) = elem['competitions'][0]['competitors']
                 if hteam['homeAway'] != 'home':
@@ -103,7 +105,7 @@ class NFLSourceESPN(NFLSource):
                 else:
                     ascore = hscore = np.nan
 
-                df.loc[len(df)] = [season, elem['id'], elem['week']['number'], self.to_datetime(elem['date']),
+                df.loc[len(df)] = [seas, elem['id'], elem['week']['number'], self.to_datetime(elem['date']),
                     ateam['team']['abbreviation'], hteam['team']['abbreviation'], ascore, hscore]
 
             d += pd.DateOffset(months=1)
@@ -384,13 +386,18 @@ class NFLSourceESPN(NFLSource):
         '''
         return pd.to_datetime(date).to_pydatetime().astimezone(self.zone).replace(tzinfo=None)
 
-    def season_dates(self, year):
-        '''Returns span for a season (regular season = 2) as pandas datetimes
+    def season_dates(self, year, season=None):
+        '''Returns span for an entire or partial season
         '''
 
         url = 'https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/seasons/{}'.format(year)
         result = requests.get(url).json()
-        return (pd.to_datetime(result['startDate']), pd.to_datetime(result['endDate']))
+        if season == None:
+            return (pd.to_datetime(result['startDate']), pd.to_datetime(result['endDate']))
+
+        # as it happens, the ESPN season abbreviations match ours perfectly so no mapping required
+        z = [k for k in result['types']['items'] if k['abbreviation']==season][0]
+        return (pd.to_datetime(z['startDate']), pd.to_datetime(z['endDate']))
 
     def gameinfo(self, id):
         '''Return detail for the specified game

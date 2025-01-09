@@ -414,9 +414,18 @@ class NFL():
         self.games_ = self.stash_.copy()
         self.stats = None
 
-    def update(self):
+    def update(self, season=None):
         ''' Updates team and game data from the underlying API
+
+            season:  load only the specified season, else load the entire season (including pre- and post-game)
+                     
+                     This was originally conceived as a way to limit load times, but in practice it typically
+                     doesn't save much, and it's limited to loading just the regular season since so much
+                     of the module is dependent on that.
         '''
+
+        if season and season != 'reg':
+            raise NotImplementedError('Exclusion of regular season from update operations is not supported')
 
         self.teams_ = {}
         self.divs_  = {}
@@ -444,7 +453,7 @@ class NFL():
             self.confs_[conf].add(key)
 
         # engine returns a flat dataframe
-        g = self.engine.games(self)
+        g = self.engine.games(self, season)
         g['p'] = (g['hs'].isna()==False) & (g['as'].isna()==False)
 
         # convert nans to 0's so we can set column type to int
@@ -464,7 +473,7 @@ class NFL():
             t = set(df['at'].unique()) | set(df['ht'].unique())
             self.seasons_[s] = t & teams
 
-        if not self.week:
+        if not self.week and 'reg' in self.seasons_:
             # assumes games are sorted chronologically
             now = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
             weekends = {}
@@ -477,6 +486,9 @@ class NFL():
             if self.week and self.week < max(self.weeks('reg')) and now > weekends[self.week]:
                 # if between weeks, go to the next week
                 self.week += 1
+
+        if self.season != self.seasons_:
+            self.season = list(self.seasons_.keys())[0]
 
         self.stats = None
 
