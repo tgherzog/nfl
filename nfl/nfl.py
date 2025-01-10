@@ -1,5 +1,4 @@
 
-import openpyxl
 import sys
 import logging
 import copy
@@ -487,7 +486,7 @@ class NFL():
                 # if between weeks, go to the next week
                 self.week += 1
 
-        if self.season != self.seasons_:
+        if self.season not in self.seasons_:
             self.season = list(self.seasons_.keys())[0]
 
         self.stats = None
