@@ -215,10 +215,11 @@ class NFLSourceESPN(NFLSource):
             # iterate scoringPlays to count touchdowns
             for score in result['scoringPlays']:
                 key = game['ht'] if score['team']['uid'] == hteam['uid'] else game['at']
-                if score['type']['id'] == '68':
-                    df.loc[('rushing','tds'), key] += 1
-                elif score['type']['id'] == '67':
-                    df.loc[('passing','tds'), key] += 1
+                if 'type' in score:
+                    if score['type']['id'] == '68':
+                        df.loc[('rushing','tds'), key] += 1
+                    elif score['type']['id'] == '67':
+                        df.loc[('passing','tds'), key] += 1
 
             return df
 
@@ -353,20 +354,20 @@ class NFLSourceESPN(NFLSource):
 
         if len(api_teams) > 0:
             for game in nfl.games(api_teams, season='reg'):
-                if game['id'] in self.nettd_gamecache:
-                    tds = self.nettd_gamecache[game['id']]
+                if game.name in self.nettd_gamecache:
+                    tds = self.nettd_gamecache[game.name]
                 else:
                     tds = 0     # count of net tds for home team. for away team, it's the negative value
 
-                    result = self.gameinfo(game['id'])
-                    for elem in result['drives']['previous']:
-                        if elem['shortDisplayResult'] == 'TD':
+                    result = self.gameinfo(game.name)
+                    for elem in result['scoringPlays']:
+                        if elem['scoringType']['abbreviation'] == 'TD':
                             if elem['team']['abbreviation'] == game['ht']:
                                 tds += 1
                             else:
                                 tds -= 1
 
-                    self.nettd_gamecache[game['id']] = tds
+                    self.nettd_gamecache[game.name] = tds
 
                 if game['ht'] in api_teams:
                     td[game['ht']] += tds
