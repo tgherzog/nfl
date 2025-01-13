@@ -11,7 +11,7 @@ from .utils import safeInt, to_seconds, to_int_list, current_season
 
 class NFLSourceESPN(NFLSource):
 
-    source = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates={:04d}{:02d}'
+    season_types = {1: 'pre', 2: 'reg', 3: 'post'}
 
     def __init__(self):
         super().__init__()
@@ -79,8 +79,8 @@ class NFLSourceESPN(NFLSource):
 
         '''
 
-        season_types = {1: 'pre', 2: 'reg', 3: 'post'}
         df = pd.DataFrame(columns=['seas', 'id', 'wk', 'ts', 'at', 'ht', 'as','hs'])
+        source = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates={:04d}{:02d}'
 
         (start,end) = self.season_dates(nfl.year)
         first = start.floor(freq='D').replace(day=1)
@@ -88,10 +88,10 @@ class NFLSourceESPN(NFLSource):
 
         d = first
         while d <= last:
-            self.lasturl = self.source.format(d.year, d.month)
+            self.lasturl = source.format(d.year, d.month)
             result = requests.get(self.lasturl).json()
             for elem in result['events']:
-                seas = season_types.get(elem['season']['type'],'na')
+                seas = self.season_types.get(elem['season']['type'],'na')
                 if season and season != seas:
                     continue
 
@@ -310,7 +310,8 @@ class NFLSourceESPN(NFLSource):
                 gametime = pd.to_datetime(game['date']).astimezone(self.zone).replace(tzinfo=None)
                 df.loc[at, 'status'] = '{}/{} {:02d}:{:02d}'.format(gametime.month, gametime.day, gametime.hour, gametime.minute)
 
-        return NFLScoreboard(nfl, result['season']['year'], result['week']['number'], df)
+        season = self.season_types.get(result['season']['type'])
+        return NFLScoreboard(nfl, result['season']['year'], result['week']['number'], season, df)
 
 
     def roster(self, nfl, code):

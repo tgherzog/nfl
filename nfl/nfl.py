@@ -56,7 +56,7 @@ class NFLTeam():
         '''Team schedule
         '''
 
-        return self.host.schedule(self.code, by='team')
+        return self.host.schedule(self.code, by='team', season='reg')
 
     @property
     def roster(self):
@@ -495,10 +495,10 @@ class NFL():
     def scoreboard(self):
 
         z = self.engine.scoreboard(self)
-        if z and self.autoUpdate and self.year == z.year:
+        if z and self.autoUpdate and self.year == z.year and z.season:
             for (k,v) in z.scoreboard.iterrows():
                 if v['status'] == 'Final' or v['status'] == 'Final/OT':
-                    self.set(z.week, **{v['hteam']: v['hscore'], v['ateam']: v['ascore']})
+                    self.set(z.week, season=z.season, **{v['hteam']: v['hscore'], v['ateam']: v['ascore']})
 
         return z
 
@@ -639,7 +639,7 @@ class NFL():
         '''
 
         season = season or self.season
-        z = self.gameFrame(teams, week, season)[['p']]
+        z = self.gameFrame(teams, week, season=season)[['p']]
         z.loc[:] = False
         self.games_.update(pd.concat({season: z}, names=['season']))
         self.stats = None
@@ -1500,10 +1500,11 @@ class NFLScoreboard():
             scoreboard  pandas DataFrame
     '''
 
-    def __init__(self, nfl, year, week, scoreboard):
+    def __init__(self, nfl, year, week, season, scoreboard):
         self.nfl  = nfl
         self.year = year
         self.week = week
+        self.season = season
         self.scoreboard = scoreboard
 
     def __repr__(self):
@@ -1532,6 +1533,12 @@ class NFLScoreboard():
 
         return z.drop('state',axis=1)
 
+
+class NFLPlayDesc(str):
+    def __repr__(self):
+        '''Return unformatted string
+        '''
+        return self
         
 class NFLPlaysFrame(pd.DataFrame):
 
@@ -1541,9 +1548,9 @@ class NFLPlaysFrame(pd.DataFrame):
            are treated as ordinary keys
         '''
         if pos < 0:
-            return self.iloc[pos]['desc']
+            return NFLPlayDesc(self.iloc[pos]['desc'])
 
-        return self.loc[pos]['desc']
+        return NFLPlayDesc(self.loc[pos]['desc'])
 
 class NFLRoster():
     '''Contains a team roster
