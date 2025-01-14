@@ -149,7 +149,7 @@ class NFLSourceESPN(NFLSource):
             df.loc[('head','date'), :] = datetime.strftime(game['ts'], '%Y-%m-%d')
             df.loc[('head','event'), :] = game.name
 
-            if not game['p']:
+            if result['header']['competitions'][0]['status']['type']['state'] == 'pre':
                 return df.dropna()
 
             (hteam,ateam) = result['header']['competitions'][0]['competitors']
