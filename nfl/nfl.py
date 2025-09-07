@@ -311,6 +311,9 @@ class NFL():
         if self.stats is not None:
             return self.stats
 
+        if self.games_ is None:
+            raise RuntimeError('game data has not yet been updated or loaded')
+
         stat_cols = [('name',''),('div',''),('conf','')]
         stat_cols += list(pd.MultiIndex.from_product([['overall','division','conference', 'vic_stren', 'sch_stren'],['win','loss','tie','pct']]))
         stat_cols += list(pd.MultiIndex.from_product([['misc'],['rank-conf','rank-overall', 'pts-scored', 'pts-allowed', 'conf-pts-scored', 'conf-pts-allowed']]))
@@ -382,9 +385,12 @@ class NFL():
 
     def stash(self, inplace=True):
         '''Saves a copy of current game data
+
+        inplace:    if True then the copy is saved to a class variable for easy restore. If false,
+                    the copy is returned and not stored, allowing you to manage multiple stashes
         '''
 
-        if len(self.games_) == 0:
+        if self.games_ is None:
             raise RuntimeError('game data has not yet been updated or loaded')
 
         stash_ = self.games_.copy()
@@ -397,6 +403,9 @@ class NFL():
 
     def restore(self, stash=None):
         ''' Restores from the previous stash
+
+        stash:  the copy to restore from (returned from stash(inplace=True)). If None then try to restore
+                from internal copy
         '''
 
         if stash:
@@ -645,18 +654,21 @@ class NFL():
         self.stats = None
 
 
-    def gameFrame(self, teams=None, limit=None, allGames=False, season=None):
+    def gameFrame(self, teams=None, weeks=None, allGames=False, season=None):
         '''Returns raw game data as a DataFrame. This is mostly used internally.
         '''
 
+        if self.games_ is None:
+            raise RuntimeError('game data has not been updated or loaded. Call update or load')
+
         season = season or self.season
 
-        if type(limit) is int:
-            limit = range(limit, limit+1)
+        if type(weeks) is int:
+            weeks = range(weeks, weeks+1)
 
         z = self.games_.xs(season)
-        if limit:
-            z = z[z['wk'].isin(limit)]
+        if weeks:
+            z = z[z['wk'].isin(weeks)]
 
         if teams:
             teams = self._list(teams)
@@ -667,11 +679,11 @@ class NFL():
 
         return z
 
-    def games(self, teams=None, limit=None, allGames=False, season=None):
+    def games(self, teams=None, weeks=None, allGames=False, season=None):
         '''Iterate over the game database, returning a series
         '''
 
-        for (_,game) in self.gameFrame(teams, limit, allGames, season).iterrows():
+        for (_,game) in self.gameFrame(teams, weeks, allGames, season).iterrows():
             if game['p'] == False:
                 game['as'] = game['hs'] = np.nan
 
@@ -751,7 +763,7 @@ class NFL():
         weeks2 = self._list(weeks)
 
         if by == 'game':
-            games = self.gameFrame(teams=teams2, limit=weeks2, allGames=True, season=season).copy()
+            games = self.gameFrame(teams=teams2, weeks=weeks2, allGames=True, season=season).copy()
             df = games.rename({ 'wk': 'week', 'ht': 'hteam', 'at': 'ateam', 'hs': 'hscore', 'as': 'ascore', 'ts': 'date'}, axis=1)
 
             if (df['p']==False).any():
@@ -790,7 +802,7 @@ class NFL():
 
         df = pd.DataFrame(index=pd.MultiIndex.from_product([weeks2, teams2], names=['week', 'team']),
                 columns=['opp', 'loc', 'score', 'opp_score', 'wlt', 'date'])
-        for game in self.games(teams=teams2, limit=weeks2, allGames=True, season=season):
+        for game in self.games(teams=teams2, weeks=weeks2, allGames=True, season=season):
             if game['ht'] in teams2:
                 df.loc[(game['wk'],game['ht'])] = [game['at'], 'home', game['hs'], game['as'], NFL.result(game['hs'], game['as']), game['ts']]
             
@@ -813,7 +825,7 @@ class NFL():
         return df
 
 
-    def opponents(self, teams, limit=None, allGames=False, season=None):
+    def opponents(self, teams, weeks=None, allGames=False, season=None):
         ''' Returns the set of common opponents of one or more teams
 
             The teams argument can be a single team or a list.
@@ -826,7 +838,7 @@ class NFL():
 
         ops = {t:set() for t in teams}
 
-        for game in self.games(teams, limit, allGames=allGames, season=season):
+        for game in self.games(teams, weeks=weeks, allGames=allGames, season=season):
             if game['ht'] in ops:
                 ops[game['ht']].add(game['at'])
 
@@ -855,7 +867,7 @@ class NFL():
 
         return self.rosters_[team]
 
-    def wlt(self, teams=None, within=None, limit=None, season=None):
+    def wlt(self, teams=None, within=None, weeks=None, season=None):
         '''Return the wlt stats of one or more teams
 
         teams:  team code or list of team codes
@@ -863,16 +875,16 @@ class NFL():
         within: list of team codes that defines the wlt universe
         '''
 
-        return self._wlt(teams=teams, within=within, limit=limit, season=season)[0].drop(['scored','allowed'], axis=1)
+        return self._wlt(teams=teams, within=within, weeks=weeks, season=season)[0].drop(['scored','allowed'], axis=1)
 
-    def matrix(self, teams=None, limit=None, allGames=False, season=None):
+    def matrix(self, teams=None, weeks=None, allGames=False, season=None):
         '''Return a matrix of teams and the number of games played against each other
         '''
 
-        return self._wlt(teams, limit=limit, allGames=allGames, season=season)[1]
+        return self._wlt(teams, weeks=weeks, allGames=allGames, season=season)[1]
 
 
-    def _wlt(self, teams=None, within=None, limit=None, allGames=False, season=None):
+    def _wlt(self, teams=None, within=None, weeks=None, allGames=False, season=None):
         ''' Internal function for calculating wlt from games database
         options to calculate ancillary data.
 
@@ -896,7 +908,7 @@ class NFL():
         for t in teams:
             m.loc[t, t] = np.nan
 
-        for game in self.games(teams, limit, allGames=allGames, season=season):
+        for game in self.games(teams, weeks=weeks, allGames=allGames, season=season):
             if game['ht'] in teams and (within is None or game['at'] in within):
                 z = NFL.result(game['hs'], game['as'])
                 if z:
@@ -1146,8 +1158,13 @@ class NFL():
                         # and start over
                         return (t - set(z.index[x+1:]), rule)
 
+            # Early in the season it's possible that some teams haven't played; in that case
+            # just return the first team
+            if self.stats.loc[list(t),'overall'].sum().sum() == 0:
+                return (list(t)[0], '')
+
             suggest = '' if self.netTouchdowns else ' (try setting nfl.netTouchdowns=True)'
-            raise RuntimeError("Can't resolve tiebreaker: teams are essentially equal.{}".format(suggest))
+            raise RuntimeError("Can't resolve tiebreaker: teams are essentially equal.{} ({})".format(suggest, ','.join(t)))
 
         while len(teams) > 1:
             if fast and len(r) > 0:
@@ -1519,7 +1536,7 @@ class NFLScoreboard():
 
         return ''
 
-    def __call__(self, teams=None, limit=None):
+    def __call__(self, teams=None, state=None):
         '''Return scoreboard for just the specified team(s).
         '''
 
@@ -1528,8 +1545,8 @@ class NFLScoreboard():
             teams = self.nfl._teams(teams)
             z = z[z['ateam'].isin(teams) | z['hteam'].isin(teams)]
         
-        if limit:
-            z = z[z['state']==limit]
+        if state:
+            z = z[z['state']==state]
 
         return z.drop('state',axis=1)
 
