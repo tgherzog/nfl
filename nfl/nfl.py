@@ -1597,6 +1597,19 @@ class NFLPlayDesc(str):
         
 class NFLPlaysFrame(pd.DataFrame):
 
+    _metadata = ['gameInfo']
+
+    @property
+    def _constructor(self):
+        return NFLPlaysFrame
+
+    def __repr__(self):
+        s = self.gameInfo
+        if s:
+            s += '\n'
+
+        return s + super().__repr__()
+
     def desc(self, pos=-1):
         '''Return the description of a single row. Negative values are treated
            as offsets (i.e. from the end of the frame) while non-negative values

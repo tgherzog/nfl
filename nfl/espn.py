@@ -124,6 +124,7 @@ class NFLSourceESPN(NFLSource):
             return z
 
         if game is not None:
+            print(game)
             result = self.gameinfo(game.name)
 
             setup = {
@@ -231,7 +232,8 @@ class NFLSourceESPN(NFLSource):
             if not result.get('drives'):
                 return None         # future games have no drive data
 
-            df = NFLPlaysFrame(columns=['team', 'codes', 'period', 'clock', 'down', 'loc', 'yds', 'type', 'desc'])
+            df = NFLPlaysFrame(columns=['team', 'codes', 'period', 'clock', 'score', 'down', 'loc', 'yds', 'type', 'desc'])
+            df.gameInfo = '{} v {} (week {})'.format(game['at'], game['ht'], game['wk'])
             for drive in result['drives']['previous']:
                 for play in drive['plays']:
                     codes = 'S' if play['scoringPlay'] else ''
@@ -240,6 +242,7 @@ class NFLSourceESPN(NFLSource):
                             codes += 'T'
 
                     df.loc[len(df)] = [drive['team']['abbreviation'], codes, play['period']['number'], play['clock']['displayValue'],
+                        '{}-{}'.format(play['awayScore'], play['homeScore']),
                         play['start'].get('shortDownDistanceText',''),
                         play['start'].get('possessionText',''), play.get('statYardage',np.nan), play['type']['text'], play['text']
                     ]
