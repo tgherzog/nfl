@@ -331,7 +331,7 @@ class NFLSourceESPN(NFLSource):
         for side in results['athletes']:
             if sides.get(side['position']):
                 for elem in side['items']:
-                    df.loc[len(df)] = [sides[side['position']], elem['position']['abbreviation'], elem['position']['name'], elem['fullName'], elem['jersey'] or np.nan]
+                    df.loc[len(df)] = [sides[side['position']], elem['position']['abbreviation'], elem['position']['name'], elem['fullName'], elem.get('jersey', np.nan)]
 
         df.sort_values(['side', 'position'], inplace=True)
         return NFLRoster(df.replace({'side': r'.+:(.+)'}, {'side': r'\1'}, regex=True))
