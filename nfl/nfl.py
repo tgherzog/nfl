@@ -1617,7 +1617,7 @@ class NFLPlayer(pd.Series):
 
     def __repr__(self):
         if self.get('jersey') is np.nan:
-            return '{} - {}'.format(self['name'], self['position'])
+            return '{}: {}'.format(self['name'], self['position'])
 
         return '{}: {} ({})'.format(self['name'], self['position'], self['jersey'])
 
@@ -1647,9 +1647,12 @@ class NFLRoster():
     '''Contains a team roster
     '''
 
+    quarterback = None
+
     def __init__(self, roster, host):
         self.roster = roster
         self.host = host
+        self.quarterback = self.member('QB')
 
     def __getattr__(self, key):
         '''Returns the portion of the roster for the side with the specified property name
@@ -1691,12 +1694,6 @@ class NFLRoster():
         return self.member('COACH')
 
     @property
-    def quarterback(self):
-        '''Starting quarterback (i.e. 1st quarterback in roster)
-        '''
-        return self.member('QB')
-
-    @property
     def positions(self):
         '''List of position codes in the roster
         '''
@@ -1719,8 +1716,3 @@ class NFLRoster():
         '''Name and jersey for the 1st roster member with the given code
         '''
         return NFLPlayer(self[code].iloc[0], self.host)
-        if row['jersey'] is np.nan:
-            return row['name']
-        
-
-        return '{} ({})'.format(row['name'], row['jersey'])
