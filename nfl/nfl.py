@@ -867,6 +867,44 @@ class NFL():
 
         return self.rosters_[team]
 
+    def player_stats(self, id, keys=False, stack=None):
+        '''Return statistics for the specified player.
+           For now, unlike rosters, statistics are not cached
+
+           id:  if a scalar, this is interpreted as a engine-specific player identifier
+                if a list-like you can pass id's or NFLPlayer objects to return a multi-index dataframe
+
+           stack: if returning multiple players, specify the multi-index key. Typical values are 'id' and 'name'.
+                  Note that ids are always used if ids are supplied as arguments
+        '''
+
+
+        if isinstance(id, NFLPlayer):
+            stats = self.engine.player_stats(self, id['id'], keys=keys)
+            return stats.xs('', axis=1)
+
+        if type(id) is str:
+            stats = self.engine.player_stats(self, id, keys=keys)
+            return stats.xs('', axis=1)
+
+        # else, iterate over list
+        stats = None
+        if not stack:
+            stack = 'id'
+
+        for elem in id:
+            if isinstance(elem, NFLPlayer):
+                df = self.engine.player_stats(self, elem['id'], keys=keys, label=elem[stack])
+            else:
+                 df = self.engine.player_stats(self, elem, keys=keys, label=elem)
+
+            if stats is None:
+                stats = df
+            else:
+                stats = pd.concat([stats, df], axis=1)
+
+        return stats
+
     def wlt(self, teams=None, within=None, weeks=None, season=None):
         '''Return the wlt stats of one or more teams
 
@@ -1569,12 +1607,49 @@ class NFLPlaysFrame(pd.DataFrame):
 
         return NFLPlayDesc(self.loc[pos]['desc'])
 
+class NFLPlayer(pd.Series):
+    '''Encapsulates a player in the roster
+    '''
+
+    def __init__(self, series, host):
+        super().__init__(series)
+        self.host = host
+
+    def __repr__(self):
+        if self.get('jersey') is np.nan:
+            return '{} - {}'.format(self['name'], self['position'])
+
+        return '{}: {} ({})'.format(self['name'], self['position'], self['jersey'])
+
+    @property
+    def stats(self):
+        ''' Synonym for player_stats()
+        '''
+        return self.host.player_stats(self)
+
+    def player_stats(self, keys=False):
+        ''' Table of player stats. From the API, this is a combination of the 'statistics'
+            object, which has a persistent layout, and teh 'nextGame' object whose columns by week.
+            Rows vary depending on the position. Note that the ESPN API exhibits an occasional
+            bug where some columns don't have the correct number of rows, in which case those
+            columns are dropped
+
+            keys: specify shorter keys in place of human readable names for index
+        '''
+
+        return self.host.player_stats(self['id'], keys=keys)
+
+
+#   def _repr_html_(self):
+
+
 class NFLRoster():
     '''Contains a team roster
     '''
 
-    def __init__(self, roster):
+    def __init__(self, roster, host):
         self.roster = roster
+        self.host = host
 
     def __getattr__(self, key):
         '''Returns the portion of the roster for the side with the specified property name
@@ -1591,14 +1666,14 @@ class NFLRoster():
         return df
 
     def __getitem__(self, key):
-        '''If an int is passed, returns the player with that jersey number.
+        '''If an int is passed, returns the NFLPlayer with that jersey number.
         If a str is passed, returns the portion of the roster for the given position code
         '''
 
         if type(key) is int:
             df = self.roster[self.roster['jersey']==str(key)]
             if len(df) > 0:
-                return df.iloc[0].rename('player')
+                return NFLPlayer(df.iloc[0], self.host)
 
             return None
 
@@ -1643,8 +1718,9 @@ class NFLRoster():
     def member(self, code):
         '''Name and jersey for the 1st roster member with the given code
         '''
-        row = self[code].iloc[0]
+        return NFLPlayer(self[code].iloc[0], self.host)
         if row['jersey'] is np.nan:
             return row['name']
         
+
         return '{} ({})'.format(row['name'], row['jersey'])

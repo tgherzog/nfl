@@ -26,8 +26,9 @@ from .nfl import (
 	NFLDivision,
 	NFLConference,
 	NFLScoreboard,
-    NFLRoster,
-    NFLScenarioMaker
+  NFLRoster,
+  NFLPlayer,
+  NFLScenarioMaker
 )
 
 # include these objects in the help docs

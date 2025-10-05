@@ -319,7 +319,7 @@ class NFLSourceESPN(NFLSource):
         '''
 
         url = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams/{}/roster'
-        df = pd.DataFrame(columns=['side', 'pos', 'position', 'name', 'jersey'])
+        df = pd.DataFrame(columns=['side', 'pos', 'position', 'name', 'jersey', 'exp', 'id'])
         sides = {'offense': '1:OFF', 'defense': '2:DEF', 'specialTeam': '3:SPEC', 'injuredReserveOrOut': '4:INJURED'}
         results = requests.get(url.format(code)).json()
 
@@ -327,14 +327,50 @@ class NFLSourceESPN(NFLSource):
         if 'team' not in results:
             return None
 
-        df.loc[len(df)] = ['0:COACH', 'COACH', 'Coach', '{} {}'.format(results['coach'][0]['firstName'], results['coach'][0]['lastName']), np.nan]
+        df.loc[len(df)] = ['0:COACH', 'COACH', 'Coach', '{} {}'.format(results['coach'][0]['firstName'], results['coach'][0]['lastName']), np.nan, np.nan, results['coach'][0]['id']]
         for side in results['athletes']:
             if sides.get(side['position']):
                 for elem in side['items']:
-                    df.loc[len(df)] = [sides[side['position']], elem['position']['abbreviation'], elem['position']['name'], elem['fullName'], elem.get('jersey', np.nan)]
+                    df.loc[len(df)] = [sides[side['position']], elem['position']['abbreviation'], elem['position']['name'], elem['fullName'], elem.get('jersey', np.nan), elem['experience']['years'], elem['id']]
 
         df.sort_values(['side', 'position'], inplace=True)
-        return NFLRoster(df.replace({'side': r'.+:(.+)'}, {'side': r'\1'}, regex=True))
+        return NFLRoster(df.replace({'side': r'.+:(.+)'}, {'side': r'\1'}, regex=True), nfl)
+
+    def player_stats(self, nfl, id, label='', keys=False):
+        '''Return stats for the specified player
+
+           id: API-specific player identifier
+
+           label: player label, used to create a top-level MultiIndex column
+
+           keys: specify shorter keys in place of human readable names for index
+        '''
+
+        url = 'https://site.api.espn.com//apis/common/v3/sports/football/nfl/athletes/{}/overview'
+        result = requests.get(url.format(id)).json()
+        key = 'labels' if keys else 'displayNames'
+
+        def extract(result):
+            ''' Extract statistics column by column. The per-column approach
+                is necessary because of a bug in the ESPN API where the 'stats' arrays
+                are not always the same size (discovered for some place kickers)
+            '''
+            index = result['statistics'][key]
+            columns = []
+            data = []
+            for col in result['statistics']['splits']:
+                if len(col['stats']) == len(index):
+                    columns.append(col['displayName'])
+                    data.append(col['stats'])
+
+            return pd.DataFrame(np.array(data).transpose(), columns=columns, index=index)
+
+        a = extract(result)
+
+        if result['nextGame']['statistics']:
+            a = pd.concat([a, extract(result['nextGame'])], axis=1)
+
+        return pd.concat([a], keys=[label], names=['player', 'split'], axis=1)
 
     def net_touchdowns(self, nfl, teams):
         '''Returns net touchdowns for the specified teams as a dict
