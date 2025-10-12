@@ -1589,12 +1589,33 @@ class NFLScoreboard():
         return z.drop('state',axis=1)
 
 
-class NFLPlayDesc(str):
+class NFLPlayDescWrapper(str):
+    '''Just a bit of syntax sugar to print a clean string to the console - no need to wrap in a print() function
+    '''
     def __repr__(self):
         '''Return unformatted string
         '''
         return self
-        
+
+class NFLPlay(pd.Series):
+
+    @property
+    def _constructor(self):
+        return NFLPlay
+
+    @property
+    def _constructor_expanddim(self):
+        return NFLPlaysFrame
+
+    @property
+    def text(self):
+        '''Return the description of a single row. Negative values are treated
+           as offsets (i.e. from the end of the frame) while non-negative values
+           are treated as ordinary keys
+        '''
+        return (NFLPlayDescWrapper(self['desc']))
+
+
 class NFLPlaysFrame(pd.DataFrame):
 
     _metadata = ['gameInfo']
@@ -1603,6 +1624,10 @@ class NFLPlaysFrame(pd.DataFrame):
     def _constructor(self):
         return NFLPlaysFrame
 
+    @property
+    def _constructor_sliced(self):
+        return NFLPlay
+
     def __repr__(self):
         s = self.gameInfo
         if s:
@@ -1610,15 +1635,12 @@ class NFLPlaysFrame(pd.DataFrame):
 
         return s + super().__repr__()
 
-    def desc(self, pos=-1):
-        '''Return the description of a single row. Negative values are treated
-           as offsets (i.e. from the end of the frame) while non-negative values
-           are treated as ordinary keys
-        '''
-        if pos < 0:
-            return NFLPlayDesc(self.iloc[pos]['desc'])
+    def text(self, offset=0):
+        '''Returns the readout from the most recent play, counting from the bottom
 
-        return NFLPlayDesc(self.loc[pos]['desc'])
+           offset:      offset from the end of the DataFrame
+        '''
+        return self.iloc[-(offset+1)].text
 
 class NFLPlayer(pd.Series):
     '''Encapsulates a player in the roster

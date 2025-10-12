@@ -124,7 +124,6 @@ class NFLSourceESPN(NFLSource):
             return z
 
         if game is not None:
-            print(game)
             result = self.gameinfo(game.name)
 
             setup = {
