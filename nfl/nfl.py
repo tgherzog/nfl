@@ -75,6 +75,11 @@ class NFLTeam():
             return z.droplevel(0).iloc[-1]
 
 
+    def __getitem__(self, key):
+        ''' subscript into the player roster
+        '''
+        return self.roster[key]
+
     def boxscore(self, week=None, season=None):
         '''Boxscore stats for the game played in the specified week. If week=None
            return the current week from the nfl object
@@ -1609,7 +1614,7 @@ class NFLPlay(pd.Series):
 
     @property
     def text(self):
-        '''Return the description of a single row. Negative values are treated
+        '''Return the readout of a single play. Negative values are treated
            as offsets (i.e. from the end of the frame) while non-negative values
            are treated as ordinary keys
         '''
@@ -1674,6 +1679,13 @@ class NFLPlayer(pd.Series):
 
         return self.host.player_stats(self['id'], keys=keys)
 
+    @property
+    def games(self):
+        '''return a series of regular-season games played
+        '''
+
+        return self.host.engine.games_per_player(self.host, self['id'])
+
 
 #   def _repr_html_(self):
 
@@ -1682,12 +1694,9 @@ class NFLRoster():
     '''Contains a team roster
     '''
 
-    quarterback = None
-
     def __init__(self, roster, host):
         self.roster = roster
         self.host = host
-        self.quarterback = self.member('QB')
 
     def __getattr__(self, key):
         '''Returns the portion of the roster for the side with the specified property name

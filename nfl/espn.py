@@ -320,10 +320,11 @@ class NFLSourceESPN(NFLSource):
         '''Return team roster
         '''
 
-        url = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams/{}/roster'
+        url = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams/{}/roster'.format(code)
+        self.lasturl = url
         df = pd.DataFrame(columns=['side', 'pos', 'position', 'name', 'jersey', 'exp', 'id'])
         sides = {'offense': '1:OFF', 'defense': '2:DEF', 'specialTeam': '3:SPEC', 'injuredReserveOrOut': '4:INJURED'}
-        results = requests.get(url.format(code)).json()
+        results = requests.get(url).json()
 
         # sanity check: since caller may be caching results
         if 'team' not in results:
@@ -348,8 +349,9 @@ class NFLSourceESPN(NFLSource):
            keys: specify shorter keys in place of human readable names for index
         '''
 
-        url = 'https://site.api.espn.com//apis/common/v3/sports/football/nfl/athletes/{}/overview'
-        result = requests.get(url.format(id)).json()
+        url = 'https://site.api.espn.com//apis/common/v3/sports/football/nfl/athletes/{}/overview'.format(id)
+        self.lasturl = url
+        result = requests.get(url).json()
         key = 'labels' if keys else 'displayNames'
 
         def extract(result):
@@ -373,6 +375,20 @@ class NFLSourceESPN(NFLSource):
             a = pd.concat([a, extract(result['nextGame'])], axis=1)
 
         return pd.concat([a], keys=[label], names=['player', 'split'], axis=1)
+
+    def games_per_player(self, nfl, player):
+        '''Return a Series of regular season opponents played for the specified player, keyed by week
+        '''
+        url = 'https://site.api.espn.com//apis/common/v3/sports/football/nfl/athletes/{}/gamelog'.format(player)
+        self.lasturl = url
+        s = pd.Series()
+        s.name = 'week'
+        result = requests.get(url).json()
+        if 'events' in result:
+            for k,game in result['events'].items():
+                s[game['week']] = game['opponent']['abbreviation']
+
+        return s.sort_index()
 
     def net_touchdowns(self, nfl, teams):
         '''Returns net touchdowns for the specified teams as a dict
