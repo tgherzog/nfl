@@ -1585,7 +1585,7 @@ class NFLScoreboard():
 
         z = self.scoreboard
         if teams:
-            teams = self.nfl._teams(teams)
+            teams = self.nfl._list(teams)
             z = z[z['ateam'].isin(teams) | z['hteam'].isin(teams)]
         
         if state:
