@@ -202,6 +202,15 @@ class NFLConference():
     def _repr_html_(self):
         return '<h3>{}</h3>\n'.format(self.code) + self.standings._repr_html_()
 
+class NFLState():
+    '''Simple storage class that holds copies of critical information, to be restored later
+    '''
+
+    def __init__(self, nfl):
+        self.games = nfl.games_.copy()
+        self.week  = nfl.week
+
+
 class NFL():
     '''Impelementation class for NFL data operations
 
@@ -239,7 +248,6 @@ class NFL():
         self.year = year
         self.season = season or 'reg'
         self.engine = engine
-        self.stash_ = None
         self.autoUpdate = True
         self.netTouchdowns = False
 
@@ -388,44 +396,24 @@ class NFL():
         self.stats = stats.assign(divrank=s).sort_values(['div','divrank']).drop('divrank', level=0, axis=1)
         return self.stats
 
-    def stash(self, inplace=True):
-        '''Saves a copy of current game data
-
-        inplace:    if True then the copy is saved to a class variable for easy restore. If false,
-                    the copy is returned and not stored, allowing you to manage multiple stashes
+    def stash(self):
+        '''Return a copy holding stashed game and week data, to be retored later
         '''
 
         if self.games_ is None:
             raise RuntimeError('game data has not yet been updated or loaded')
 
-        stash_ = self.games_.copy()
-        if inplace:
-            self.stash_ = stash_
-            return
-        
-        return stash_
+        return NFLState(self)
 
 
-    def restore(self, stash=None):
+    def restore(self, stash):
         ''' Restores from the previous stash
 
-        stash:  the copy to restore from (returned from stash(inplace=True)). If None then try to restore
-                from internal copy
+        stash:  the object to restore from
         '''
 
-        if stash:
-            if type(stash) is not pd.DataFrame:
-                raise RuntimeError('object passed to restore() must be a DataFrame')
-
-            self.games_ = stash.copy()
-            self.stats = None
-            return
-
-        if type(self.stash_) is not pd.DataFrame:
-            raise RuntimeError('game data has not been previously stashed')
-
-        self.games_ = self.stash_.copy()
-        self.stats = None
+        self.games_ = stash.games.copy()
+        self.week   = stash.week
 
     def update(self, season=None):
         ''' Updates team and game data from the underlying API
