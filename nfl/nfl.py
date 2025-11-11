@@ -530,7 +530,7 @@ class NFL():
 
 
         idx=pd.MultiIndex.from_product([['name','wlt','streak','rank'], ['away','home']])
-        idx = idx.append(pd.MultiIndex.from_product([['misc'],['match','time','broadcast']]))
+        idx = idx.append(pd.MultiIndex.from_product([['misc'],['match','status','broadcast']]))
         gd = pd.DataFrame(columns=idx)
         standings = self.standings.copy()
         dates = self.schedule(weeks=self.week, by='game')['date']
@@ -539,7 +539,7 @@ class NFL():
             standings.loc[standings['div']==elem, ('misc','rank')] = pd.Series(range(1,len(idx)+1), index=idx)
 
         wlt = standings.xs('overall',axis=1,level=0).drop(columns='pct')
-        for k,row in self.scoreboard.scoreboard.iterrows():
+        for k,row in self.engine.scoreboard(self).scoreboard.iterrows():
             key = '{}-{}'.format(row['ateam'], row['hteam'])
             for (pos,t) in [('away',row['ateam']),('home',row['hteam'])]:
                 gd.loc[key, ('name',pos)] = standings.loc[t, ('name','')]
@@ -549,7 +549,13 @@ class NFL():
                 gd.loc[key, ('rank',pos)] = divrank(standings.loc[t])
                 gd.loc[key, ('streak', pos)] = streak(self.schedule(t, by='team').dropna()['wlt'])
 
-            gd.loc[key, ('misc', 'time')] = dates[row['hteam']]
+            if row['status'] == 'pre':
+                gd.loc[key, ('misc', 'status')] = dates[row['hteam']]
+            elif row['status'] == 'post':
+                gd.loc[key, ('misc','status')] = '  {:2}-{:2}'.format(row['ascore'], row['hscore'])
+            else:
+                gd.loc[key, ('misc','status')] = 'F {:2}-{:2}'.format(row['ascore'], row['hscore'])
+
             gd.loc[key, ('misc', 'broadcast')] = row['broadcast']
             hdiv = standings['div'][row['hteam']]
             adiv = standings['div'][row['ateam']]
