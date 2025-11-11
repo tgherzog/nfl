@@ -505,6 +505,64 @@ class NFL():
         return z
 
     @property
+    def gameday(self):
+
+        def streak(s):
+            if len(s) == 0: return ''
+
+            n = 0
+            while n < len(s) and s.iloc[-n-1] == s.iloc[-1]:
+                n += 1
+
+            return '{}{}'.format(s.iloc[-1].upper()[0], n)
+
+        def divrank(row):
+            r = int(row[('misc','rank')])
+
+            if r % 10 == 1: e = 'st'
+            elif r % 10 == 2: e = 'nd'
+            elif r % 10 == 3: e = 'rd'
+            else: e = 'th'
+
+            (conf, div) = row[('div','')].split('-')
+
+            return '{}{} {}-{}'.format(r, e, conf, div[0])
+
+
+        idx=pd.MultiIndex.from_product([['name','wlt','streak','rank'], ['away','home']])
+        idx = idx.append(pd.MultiIndex.from_product([['misc'],['match','time','broadcast']]))
+        gd = pd.DataFrame(columns=idx)
+        standings = self.standings.copy()
+        dates = self.schedule(weeks=self.week, by='game')['date']
+        for elem in standings['div'].unique():
+            idx = standings[standings['div']==elem].index
+            standings.loc[standings['div']==elem, ('misc','rank')] = pd.Series(range(1,len(idx)+1), index=idx)
+
+        wlt = standings.xs('overall',axis=1,level=0).drop(columns='pct')
+        for k,row in self.scoreboard.scoreboard.iterrows():
+            key = '{}-{}'.format(row['ateam'], row['hteam'])
+            for (pos,t) in [('away',row['ateam']),('home',row['hteam'])]:
+                gd.loc[key, ('name',pos)] = standings.loc[t, ('name','')]
+                gd.loc[key, ('wlt',pos)] = '-'.join(wlt.loc[t].astype(str).tolist())
+                # gd.loc[key, ('div',pos)] = standings.loc[t, ('div','')]
+                # gd.loc[key, ('rank',pos)] = standings[('misc','rank')].astype(int)[t]
+                gd.loc[key, ('rank',pos)] = divrank(standings.loc[t])
+                gd.loc[key, ('streak', pos)] = streak(self.schedule(t, by='team').dropna()['wlt'])
+
+            gd.loc[key, ('misc', 'time')] = dates[row['hteam']]
+            gd.loc[key, ('misc', 'broadcast')] = row['broadcast']
+            hdiv = standings['div'][row['hteam']]
+            adiv = standings['div'][row['ateam']]
+            if adiv == hdiv:
+                gd.loc[key, ('misc','match')] = 'div'
+            elif adiv.split('-')[0] == hdiv.split('-')[0]:
+                gd.loc[key, ('misc', 'match')] = 'conf'
+            else:
+                gd.loc[key, ('misc','match')] = 'inter'
+
+        return gd
+
+    @property
     def standings(self):
 
         return self._stats()[['name','div','overall','division','conference']]
