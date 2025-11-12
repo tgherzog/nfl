@@ -549,12 +549,12 @@ class NFL():
                 gd.loc[key, ('rank',pos)] = divrank(standings.loc[t])
                 gd.loc[key, ('streak', pos)] = streak(self.schedule(t, by='team').dropna()['wlt'])
 
-            if row['status'] == 'pre':
+            if row['state'] == 'pre':
                 gd.loc[key, ('misc', 'status')] = dates[row['hteam']]
-            elif row['status'] == 'post':
-                gd.loc[key, ('misc','status')] = '  {:2}-{:2}'.format(row['ascore'], row['hscore'])
-            else:
+            elif row['state'] == 'post':
                 gd.loc[key, ('misc','status')] = 'F {:2}-{:2}'.format(row['ascore'], row['hscore'])
+            else:
+                gd.loc[key, ('misc','status')] = '  {:2}-{:2}'.format(row['ascore'], row['hscore'])
 
             gd.loc[key, ('misc', 'broadcast')] = row['broadcast']
             hdiv = standings['div'][row['hteam']]
