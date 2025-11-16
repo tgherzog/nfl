@@ -298,11 +298,11 @@ class NFL():
         '''Save data to the specified Excel file
         '''
 
-        teams = pd.DataFrame(columns=['code','name','conf','div']).set_index('code')
+        teams = pd.DataFrame(columns=['code','name','short','conf','div']).set_index('code')
         meta  = pd.DataFrame(columns=['key', 'value']).set_index('key')
 
         for key,team in self.teams_.items():
-            teams.loc[key, :] = [team['name'], team['conf'], team['div']]
+            teams.loc[key, :] = [team['name'], team['short'], team['conf'], team['div']]
 
         meta.loc['Last Updated', 'value'] = datetime.now()
         meta.loc['Engine', 'value'] = '.'.join([self.engine.__class__.__module__, self.engine.__class__.__name__])
@@ -436,7 +436,8 @@ class NFL():
         for elem in self.engine.teams(self):
             key = elem['key']
             team = {
-                'name': elem['name'],
+                'name': elem['fullname'],
+                'short': elem['name'],
                 'conf': elem['conf'],
                 'div':  '-'.join([elem['conf'], elem['div']])
             }
@@ -540,9 +541,10 @@ class NFL():
 
         wlt = standings.xs('overall',axis=1,level=0).drop(columns='pct')
         for k,row in self.engine.scoreboard(self).scoreboard.iterrows():
-            key = '{}-{}'.format(row['ateam'], row['hteam'])
+            # key = '{}-{}'.format(row['ateam'], row['hteam'])
+            key = k
             for (pos,t) in [('away',row['ateam']),('home',row['hteam'])]:
-                gd.loc[key, ('name',pos)] = standings.loc[t, ('name','')]
+                gd.loc[key, ('name',pos)] = '{} {:>3}'.format(self.teams_[t]['short'], t)
                 gd.loc[key, ('wlt',pos)] = '-'.join(wlt.loc[t].astype(str).tolist())
                 # gd.loc[key, ('div',pos)] = standings.loc[t, ('div','')]
                 # gd.loc[key, ('rank',pos)] = standings[('misc','rank')].astype(int)[t]
@@ -564,7 +566,7 @@ class NFL():
             elif adiv.split('-')[0] == hdiv.split('-')[0]:
                 gd.loc[key, ('misc', 'match')] = 'conf'
             else:
-                gd.loc[key, ('misc','match')] = 'inter'
+                gd.loc[key, ('misc','match')] = 'league'
 
         return gd
 

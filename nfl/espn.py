@@ -22,7 +22,8 @@ class NFLSourceESPN(NFLSource):
     def teams(self, nfl):
         '''Generator must return: 
                 key (team code)
-                name
+                name (team name only)
+                fullname (including city)
                 conf
                 div
         '''
@@ -38,7 +39,8 @@ class NFLSourceESPN(NFLSource):
                     for team in div['teams']:
                         yield {
                             'key': team['abbreviation'],
-                            'name': team['displayName'],
+                            'name': team['name'],
+                            'fullname': team['displayName'],
                             'conf': conf_name,
                             'div': div_name
                         }
