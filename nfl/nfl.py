@@ -189,8 +189,8 @@ class NFLConference():
         # append all remaining teams in tiebreaker order
         champs = pd.concat([champs, pd.Series('', index=self.host.tiebreaks(self.teams-set(champs.index)).index)])
 
-        # mark wildcard slots
-        champs[4:7] = 'Wildcard'
+        # mark wildcard slots 1-3
+        champs.update(pd.Series(map(lambda x: 'Wildcard{}'.format(x), range(1,4)), index=champs[4:7].index))
         champs.name = self.code
 
         return champs[:count]
