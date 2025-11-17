@@ -80,18 +80,12 @@ class NFLTeam():
         '''
         return self.roster[key]
 
-    def boxscore(self, week=None, season=None):
-        '''Boxscore stats for the game played in the specified week. If week=None
-           return the current week from the nfl object
+    @property
+    def boxscore(self):
+        '''Boxscore stats for the active game
         '''
 
-        if week:
-            game = self.host.game(self.code, week, season)
-        else:
-            game = self.active_game
-
-        if game is not None:
-            return self.host.engine.boxscore(self.host, game)
+        return self.host.boxscore(self.code)
 
     def plays(self, count=10, week=None, season=None):
         '''Returns most recent plays from the specified game.
@@ -926,6 +920,16 @@ class NFL():
 
         return self.rosters_[team]
 
+    def boxscore(self, team, week=None, season=None):
+
+        if week is None:
+            game = self(team).active_game
+        else:
+            game = self.game(team, week, season)
+
+        return self.engine.boxscore(self, game)
+
+
     def player_stats(self, id, keys=False, stack=None):
         '''Return statistics for the specified player.
            For now, unlike rosters, statistics are not cached
@@ -1720,18 +1724,6 @@ class NFLPlayer(pd.Series):
         ''' Synonym for player_stats()
         '''
         return self.host.player_stats(self)
-
-    def player_stats(self, keys=False):
-        ''' Table of player stats. From the API, this is a combination of the 'statistics'
-            object, which has a persistent layout, and teh 'nextGame' object whose columns by week.
-            Rows vary depending on the position. Note that the ESPN API exhibits an occasional
-            bug where some columns don't have the correct number of rows, in which case those
-            columns are dropped
-
-            keys: specify shorter keys in place of human readable names for index
-        '''
-
-        return self.host.player_stats(self['id'], keys=keys)
 
     @property
     def games(self):
