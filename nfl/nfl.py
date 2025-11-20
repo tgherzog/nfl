@@ -87,6 +87,12 @@ class NFLTeam():
 
         return self.host.boxscore(self.code)
 
+    @property
+    def streak(self):
+
+        return self.host.streak(self.code)
+
+
     def plays(self, count=10, week=None, season=None):
         '''Returns most recent plays from the specified game.
 
@@ -502,14 +508,10 @@ class NFL():
     @property
     def gameday(self):
 
-        def streak(s):
-            if len(s) == 0: return ''
+        def fstreak(n):
+            if n == 0: return '   '
 
-            n = 0
-            while n < len(s) and s.iloc[-n-1] == s.iloc[-1]:
-                n += 1
-
-            return '{}{}'.format(s.iloc[-1].upper()[0], n)
+            return '{:+3}'.format(n)
 
         def divrank(row):
             r = int(row[('misc','rank')])
@@ -523,18 +525,21 @@ class NFL():
 
             return '{}{} {}-{}'.format(r, e, conf, div[0])
 
-
+        # gameday has the same basic structure as the scoreboard
+        # we get the scoreboard directly from the engine to prevent autoUpdate
+        src = self.engine.scoreboard(self)
         idx=pd.MultiIndex.from_product([['name','wlt','streak','rank'], ['away','home']])
         idx = idx.append(pd.MultiIndex.from_product([['misc'],['match','status','broadcast']]))
         gd = pd.DataFrame(columns=idx)
         standings = self.standings.copy()
-        dates = self.schedule(weeks=self.week, by='game')['date']
+        dates = self.schedule(weeks=src.week, by='game')['date']
+        streak = self.streak()
         for elem in standings['div'].unique():
             idx = standings[standings['div']==elem].index
             standings.loc[standings['div']==elem, ('misc','rank')] = pd.Series(range(1,len(idx)+1), index=idx)
 
         wlt = standings.xs('overall',axis=1,level=0).drop(columns='pct')
-        for k,row in self.engine.scoreboard(self).scoreboard.iterrows():
+        for k,row in src.scoreboard.iterrows():
             # key = '{}-{}'.format(row['ateam'], row['hteam'])
             key = k
             for (pos,t) in [('away',row['ateam']),('home',row['hteam'])]:
@@ -543,7 +548,7 @@ class NFL():
                 # gd.loc[key, ('div',pos)] = standings.loc[t, ('div','')]
                 # gd.loc[key, ('rank',pos)] = standings[('misc','rank')].astype(int)[t]
                 gd.loc[key, ('rank',pos)] = divrank(standings.loc[t])
-                gd.loc[key, ('streak', pos)] = streak(self.schedule(t, by='team').dropna()['wlt'])
+                gd.loc[key, ('streak', pos)] = fstreak(streak[t])
 
             if row['state'] == 'pre':
                 gd.loc[key, ('misc', 'status')] = dates[row['hteam']]
@@ -928,6 +933,36 @@ class NFL():
             game = self.game(team, week, season)
 
         return self.engine.boxscore(self, game)
+
+
+    def streak(self, teams=None, weeks=None):
+        '''Returns the streak for the specified teams, either as a number (if a single team is passed)
+           or as a Series (if a list-like is passed)
+        '''
+
+        teams2 = self._list(teams)
+
+        sched = self.schedule(teams=teams2, weeks=weeks, by='team').dropna().reset_index().set_index(['team', 'week']).sort_index()['wlt']
+        s = pd.Series(0, index=sched.index.unique(0), dtype=int)
+        for t in s.index:
+            z = sched.xs(t)
+            if len(z) > 0 and z.iloc[-1] != 'tie':
+                n = 0
+
+                while n < len(z) and z.iloc[-n-1] == z.iloc[-1]:
+                    n += 1
+
+                if z.iloc[-1] == 'loss':
+                    n *= -1
+
+                s[t] = n
+
+
+        if isinstance(teams, str) and len(teams2) == 1:
+            # return the value for a single team
+            return s[teams]
+
+        return s
 
 
     def player_stats(self, id, keys=False, stack=None):
