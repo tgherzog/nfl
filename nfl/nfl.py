@@ -505,8 +505,7 @@ class NFL():
 
         return z
 
-    @property
-    def gameday(self):
+    def gameday(self, sort=True):
 
         def fstreak(n):
             if n == 0: return '   '
@@ -532,13 +531,15 @@ class NFL():
         idx = idx.append(pd.MultiIndex.from_product([['misc'],['match','status','broadcast']]))
         gd = pd.DataFrame(columns=idx)
         standings = self.standings.copy()
-        dates = self.schedule(weeks=src.week, by='game')['date']
+        dates = self.schedule(weeks=src.week, by='game', ts=True)['date']
         streak = self.streak()
         for elem in standings['div'].unique():
             idx = standings[standings['div']==elem].index
             standings.loc[standings['div']==elem, ('misc','rank')] = pd.Series(range(1,len(idx)+1), index=idx)
 
         wlt = standings.xs('overall',axis=1,level=0).drop(columns='pct')
+        orders = {'div': 1, 'conf': 2, 'league': 3}
+        confpre = {'NFC': 0, 'AFC': 20}
         for k,row in src.scoreboard.iterrows():
             # key = '{}-{}'.format(row['ateam'], row['hteam'])
             key = k
@@ -551,7 +552,7 @@ class NFL():
                 gd.loc[key, ('streak', pos)] = fstreak(streak[t])
 
             if row['state'] == 'pre':
-                gd.loc[key, ('misc', 'status')] = dates[row['hteam']]
+                gd.loc[key, ('misc', 'status')] = dates[row['hteam']].strftime('%m/%d %H:%M')
             elif row['state'] == 'post':
                 gd.loc[key, ('misc','status')] = 'F {:2}-{:2}'.format(row['ascore'], row['hscore'])
             else:
@@ -567,7 +568,15 @@ class NFL():
             else:
                 gd.loc[key, ('misc','match')] = 'league'
 
-        return gd
+            hconf = confpre[standings.loc[row['hteam']][('div','')].split('-')[0]]
+            gd.loc[key, ('misc','order')] = hconf + orders[gd.loc[key, ('misc','match')]]
+            gd.loc[key, ('misc', 'gt')] = dates[row['hteam']]
+
+        gd[('misc','interest')] = pd.Series(range(len(gd)), index=gd.sort_values([('misc','order'),('misc','gt')]).index)
+        if sort:
+            gd.sort_values([('misc','interest'), ('misc', 'gt')], inplace=True)
+
+        return gd.drop([('misc','order'), ('misc', 'gt'), ('misc', 'interest')], axis=1).set_index(pd.Series(range(len(gd))))
 
     @property
     def standings(self):
