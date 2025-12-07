@@ -253,6 +253,42 @@ class NFLSourceESPN(NFLSource):
 
             return df
 
+    def drives(self, nfl, game):
+
+        if game is not None:
+            result = self.gameinfo(game.name)
+
+            if not result.get('drives'):
+                return None         # future games have no drive data
+
+            df = pd.DataFrame(columns=['period','start','pos','plays','yds','elapsed','result', 'pts', 'ascore','hscore'], index=pd.MultiIndex.from_product([[],[]], names=('team','seq')))
+            smax = {}
+            for drive in result['drives']['previous']:
+                t   = drive['team']['abbreviation']
+                per = drive['start']['period']['number']
+                st  = drive['start']['clock']['displayValue']
+                pos = drive['start']['text']
+                pl  = drive['offensivePlays']
+                yds = drive['yards']
+                ela = drive['timeElapsed']['displayValue']
+                out = drive.get('displayResult', '')
+                seq = smax.get(t, -1) + 1
+                if t == game['ht']:
+                    pts = drive['plays'][-1]['homeScore'] - drive['plays'][0]['homeScore']
+                else:
+                    pts = drive['plays'][-1]['awayScore'] - drive['plays'][0]['awayScore']
+
+                if pts > 0:
+                    ascore = drive['plays'][-1]['awayScore']
+                    hscore = drive['plays'][-1]['homeScore']
+                else:
+                    ascore = hscore = ''
+
+                df.loc[(t, seq), df.columns] = [per, st, pos, pl, yds, ela, out, pts, ascore, hscore]
+                smax[drive['team']['abbreviation']] = seq
+
+            return df
+
 
     def scoreboard(self, nfl):
         '''Return current scoreboard

@@ -117,6 +117,19 @@ class NFLTeam():
         if game is not None:
             return self.host.engine.plays(self.host, game, count)
 
+    def drives(self, week=None, season=None):
+        '''Returns drive summary from the specified game
+        '''
+
+        if week:
+            game = self.host.game(self.code, week, season)
+        else:
+            game = self.active_game
+
+        if game is not None:
+            return self.host.engine.drives(self.host, game)
+            
+
     def __repr__(self):
         wk = self.host.week or 1
         s  = self.schedule.loc[1:wk+3].__repr__()
