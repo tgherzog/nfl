@@ -781,7 +781,7 @@ class NFL():
         if weeks:
             z = z[z['wk'].isin(weeks)]
 
-        if teams:
+        if teams is not None:
             teams = self._list(teams)
             z = z[z['ht'].isin(teams) | z['at'].isin(teams)]
 
@@ -1061,25 +1061,33 @@ class NFL():
 
         teams:  team code or list of team codes
 
-        within: list of team codes that defines the wlt universe
+        within: list of opponent team codes that defines the wlt universe
+
+        weeks:  limit to specified weeks
+
+        season: override default season
         '''
 
         return self._wlt(teams=teams, within=within, weeks=weeks, season=season)[0].drop(['scored','allowed'], axis=1)
 
     def matrix(self, teams=None, weeks=None, allGames=False, season=None):
         '''Return a matrix of teams and the number of games played against each other
+
+        teams:  team code or list of team codes
+
+        weeks:  limit to specified weeks
+
+        allGames: if True, include games that haven't been played yet
+
+        season: override default season
         '''
 
         return self._wlt(teams, weeks=weeks, allGames=allGames, season=season)[1]
 
 
     def _wlt(self, teams=None, within=None, weeks=None, allGames=False, season=None):
-        ''' Internal function for calculating wlt from games database
-        options to calculate ancillary data.
-
-        points: include columns for points scored and allowed
-
-        matrix: if True, returns the wlt frame and the games frame as a tuple
+        ''' Internal function for calculating wlt and matrix from games database
+        options to calculate ancillary data. Options are same as for wlt() and matrix()
         '''
 
         teams  = self._list(teams)
