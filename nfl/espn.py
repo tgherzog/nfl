@@ -261,7 +261,7 @@ class NFLSourceESPN(NFLSource):
             if not result.get('drives'):
                 return None         # future games have no drive data
 
-            df = pd.DataFrame(columns=['period','start','pos','plays','yds','elapsed','result', 'pts', 'ascore','hscore'], index=pd.MultiIndex.from_product([[],[]], names=('team','seq')))
+            df = pd.DataFrame(columns=['period','start','pos','plays','yds','elapsed','result', 'pts', game['at'], game['ht']], index=pd.MultiIndex.from_product([[],[]], names=('team','seq')))
             smax = {}
             for drive in result['drives']['previous']:
                 t   = drive['team']['abbreviation']
@@ -286,6 +286,10 @@ class NFLSourceESPN(NFLSource):
 
                 df.loc[(t, seq), df.columns] = [per, st, pos, pl, yds, ela, out, pts, ascore, hscore]
                 smax[drive['team']['abbreviation']] = seq
+
+            # in case needed, stash the names of the home and away teams as properties
+            df.ateam = game['at']
+            df.hteam = game['ht']
 
             return df
 

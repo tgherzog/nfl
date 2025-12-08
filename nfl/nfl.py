@@ -118,7 +118,12 @@ class NFLTeam():
             return self.host.engine.plays(self.host, game, count)
 
     def drives(self, week=None, season=None):
-        '''Returns drive summary from the specified game
+        '''Returns drive summary from the specified game as a DataFrame
+
+           The dataframe includes two columns that display changes in game score.
+           For readability the column names are the same as the team IDs. As a convenience,
+           the engine adds 'ateam' and 'hteam' properties to the dataframe to
+           make it easier to identify these programatically
         '''
 
         if week:
@@ -509,6 +514,11 @@ class NFL():
 
     @property
     def scoreboard(self):
+        ''' Returns scoreboard display for the current week
+
+            By default, this property will update the game database with final scores.
+            Set autoUpdate=False to disable this behavior
+        '''
 
         z = self.engine.scoreboard(self)
         if z and self.autoUpdate and self.year == z.year and z.season:
@@ -519,6 +529,27 @@ class NFL():
         return z
 
     def gameday(self, sort=True):
+        ''' Returns a gameday display for the current week. This resembles the scoreboard
+            but with less real-time information and more seasonal context.
+
+
+            sort: sorts output first by conference, then by matchup (division, conf, league)
+            to cluster 'interesting' games together. If set to False, output is sorted in the same
+            order as scoreboard
+
+            Unlike scoreboard, this property does *not* update the game database with final
+            scores. It will update, however, if other operations update the database. For example,
+            If you access the scoreboard property then the team records in subsequent gameday
+            displays may also update to include current results. If you don't want this, you
+            can do something like this:
+
+            stash = nfl.stash()      # save game state (optional)
+            nfl.clear(nfl.week)      # erase scores for the current week
+            nfl.gameday()            # wlt, rank, streak etc now show status going *into* current week
+            nfl.autoUpdate=False     # optional: prevent future dashboards from updating the database
+            nfl.restore(stash)       # restore game state (optional)
+
+        '''
 
         def fstreak(n):
             if n == 0: return '   '
