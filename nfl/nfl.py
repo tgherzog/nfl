@@ -915,6 +915,9 @@ class NFL():
         # rows for teams with bye weeks
         if weeks2 is None:
             weeks2 = self.weeks(season)
+        else:
+            w2 = self.weeks(season)
+            weeks2 = list(filter(lambda x: x in w2, weeks2))
 
         df = NFLDataFrame(index=pd.MultiIndex.from_product([weeks2, teams2], names=['week', 'team']),
                 columns=['opp', 'loc', 'score', 'opp_score', 'wlt', 'date'])
