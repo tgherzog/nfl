@@ -22,6 +22,7 @@ And lots more!
 
 from .nfl import (
 	NFL,
+  NFLDataFrame,
 	NFLTeam,
 	NFLDivision,
 	NFLConference,
@@ -34,6 +35,7 @@ from .nfl import (
 # include these objects in the help docs
 __all__ = [
   "NFL",
+  "NFLDataFrame",
   "NFLTeam",
   "NFLDivision",
   "NFLConference",

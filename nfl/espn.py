@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from .source import NFLSource
-from .nfl import NFLScoreboard, NFLRoster, NFLPlaysFrame
+from .nfl import NFLScoreboard, NFLRoster, NFLDataFrame, NFLPlaysFrame
 from .utils import safeInt, to_seconds, to_int_list, current_season
 
 class NFLSourceESPN(NFLSource):
@@ -235,6 +235,7 @@ class NFLSourceESPN(NFLSource):
 
             df = NFLPlaysFrame(columns=['team', 'codes', 'period', 'clock', 'score', 'down', 'loc', 'yds', 'type', 'desc'])
             df.gameInfo = '{} v {} (week {})'.format(game['at'], game['ht'], game['wk'])
+            df.host = nfl
             for drive in result['drives']['previous']:
                 for play in drive['plays']:
                     codes = 'S' if play['scoringPlay'] else ''
@@ -261,7 +262,8 @@ class NFLSourceESPN(NFLSource):
             if not result.get('drives'):
                 return None         # future games have no drive data
 
-            df = pd.DataFrame(columns=['period','start','pos','plays','yds','elapsed','result', 'pts', game['at'], game['ht']], index=pd.MultiIndex.from_product([[],[]], names=('team','seq')))
+            df = NFLDataFrame(columns=['period','start','pos','plays','yds','elapsed','result', 'pts', game['at'], game['ht']], index=pd.MultiIndex.from_product([[],[]], names=('team','seq')))
+            df.host = nfl
             smax = {}
             for drive in result['drives']['previous']:
                 t   = drive['team']['abbreviation']

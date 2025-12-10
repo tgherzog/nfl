@@ -252,9 +252,13 @@ class NFL():
        netTouchdowns   Determines whether "net touchdowns" are included in tiebreaker determinations
                        Fetching this data from the API is generally time consuming and rarely
                        needed, so leave it set to False in most situations
+
+       display         controls how certain dataframe display teams, either as bare codes or
+                       in a more human-readable form. This does not affect dataframe structure
+                       in any way. Recognized values are 'user' (human-readable) and 'data' (codes only)
     '''
 
-    def __init__(self, year=None, season=None, engine=None):
+    def __init__(self, year=None, season=None, engine=None, display='user'):
         self.teams_  = {}
         self.divs_   = {}
         self.confs_  = {}
@@ -268,6 +272,7 @@ class NFL():
         self.engine = engine
         self.autoUpdate = True
         self.netTouchdowns = False
+        self.display = display
 
         if not self.year:
             self.year = current_season()
@@ -573,7 +578,8 @@ class NFL():
         src = self.engine.scoreboard(self)
         idx=pd.MultiIndex.from_product([['name','wlt','streak','rank'], ['away','home']])
         idx = idx.append(pd.MultiIndex.from_product([['misc'],['match','status','broadcast']]))
-        gd = pd.DataFrame(columns=idx)
+        gd = NFLDataFrame(columns=idx)
+        gd.host = self
         standings = self.standings.copy()
         dates = self.schedule(weeks=src.week, by='game', ts=True)['date']
         streak = self.streak()
@@ -588,10 +594,8 @@ class NFL():
             # key = '{}-{}'.format(row['ateam'], row['hteam'])
             key = k
             for (pos,t) in [('away',row['ateam']),('home',row['hteam'])]:
-                gd.loc[key, ('name',pos)] = '{} {:>3}'.format(self.teams_[t]['short'], t)
+                gd.loc[key, ('name',pos)] = t
                 gd.loc[key, ('wlt',pos)] = '-'.join(wlt.loc[t].astype(str).tolist())
-                # gd.loc[key, ('div',pos)] = standings.loc[t, ('div','')]
-                # gd.loc[key, ('rank',pos)] = standings[('misc','rank')].astype(int)[t]
                 gd.loc[key, ('rank',pos)] = divrank(standings.loc[t])
                 gd.loc[key, ('streak', pos)] = fstreak(streak[t])
 
@@ -612,8 +616,8 @@ class NFL():
             else:
                 gd.loc[key, ('misc','match')] = 'league'
 
-            hconf = confpre[standings.loc[row['hteam']][('div','')].split('-')[0]]
-            gd.loc[key, ('misc','order')] = hconf + orders[gd.loc[key, ('misc','match')]]
+            hconf = hdiv.split('-')[0]
+            gd.loc[key, ('misc','order')] = confpre[hconf] + orders[gd.loc[key, ('misc','match')]]
             gd.loc[key, ('misc', 'gt')] = dates[row['hteam']]
 
         gd[('misc','interest')] = pd.Series(range(len(gd)), index=gd.sort_values([('misc','order'),('misc','gt')]).index)
@@ -874,7 +878,8 @@ class NFL():
         weeks2 = self._list(weeks)
 
         if by == 'game':
-            games = self.gameFrame(teams=teams2, weeks=weeks2, allGames=True, season=season).copy()
+            games = NFLDataFrame(self.gameFrame(teams=teams2, weeks=weeks2, allGames=True, season=season).copy())
+            games.host = self
             df = games.rename({ 'wk': 'week', 'ht': 'hteam', 'at': 'ateam', 'hs': 'hscore', 'as': 'ascore', 'ts': 'date'}, axis=1)
 
             if (df['p']==False).any():
@@ -911,8 +916,10 @@ class NFL():
         if weeks2 is None:
             weeks2 = self.weeks(season)
 
-        df = pd.DataFrame(index=pd.MultiIndex.from_product([weeks2, teams2], names=['week', 'team']),
+        df = NFLDataFrame(index=pd.MultiIndex.from_product([weeks2, teams2], names=['week', 'team']),
                 columns=['opp', 'loc', 'score', 'opp_score', 'wlt', 'date'])
+        df.host = self
+
         for game in self.games(teams=teams2, weeks=weeks2, allGames=True, season=season):
             if game['ht'] in teams2:
                 df.loc[(game['wk'],game['ht'])] = [game['at'], 'home', game['hs'], game['as'], NFL.result(game['hs'], game['as']), game['ts']]
@@ -1719,16 +1726,17 @@ class NFLScoreboard():
         self.year = year
         self.week = week
         self.season = season
-        self.scoreboard = scoreboard
+        self.scoreboard = NFLDataFrame(scoreboard)
+        self.scoreboard.host = nfl
 
     def __repr__(self):
-        if type(self.scoreboard) is pd.DataFrame:
+        if isinstance(self.scoreboard, pd.DataFrame):
             return 'Week {}\n'.format(self.week) + self.scoreboard.drop('state',axis=1).__repr__()
 
         return ''
 
     def _repr_html_(self):
-        if type(self.scoreboard) is pd.DataFrame:
+        if isinstance(self.scoreboard, pd.DataFrame):
             return '<h3>Week {}</h3>\n'.format(self.week) + self.scoreboard.drop('state',axis=1)._repr_html_()
 
         return ''
@@ -1774,10 +1782,67 @@ class NFLPlay(pd.Series):
         '''
         return (NFLPlayDescWrapper(self['desc']))
 
+class NFLDataFrame(pd.DataFrame):
+    ''' Subclass of Pandas.DataFrame that displays recognized columns as
+        team names and codes, in lieu of just codes.
 
-class NFLPlaysFrame(pd.DataFrame):
+        This works by overriding the __repr__ and _repr_html functions
+        and returning a formatted copy of itself. To make this work you must
+        also set the host property to an NFL object. The class then references
+        the 'display' property on that object to determine how to display
+        teams ('data' and 'user' are currently recognized values)
+    '''
 
-    _metadata = ['gameInfo']
+    _metadata = ['host']
+    host = None
+
+    def __repr__(self):
+
+        if self.host and self.host.display == 'user':
+            return self._reformat().__repr__()
+
+        # else, default display
+        return super().__repr__()
+
+    def _repr_html(self):
+
+        if self.host and self.host.display == 'user':
+            return self._reformat()._repr_html_()
+
+        # else, default display
+        return super()._repr_html_()        
+
+    def _reformat(self):
+        
+        def remap_val(s):
+            t = self.host.teams_
+            return s.map(lambda x: '{} {:>3}'.format(t.get(x,{}).get('short'), x) if x in t else '')
+
+        def remap_idx(s):
+            fd_size = max(map(lambda x: len(self.host.teams_[x]['short']), s))
+            t = self.host.teams_
+            return s.map(lambda x: '{} {:>3}'.format(t.get(x,{}).get('short').ljust(fd_size), x) if x in t else '')
+
+        field_names = ['opp', 'team', 'hteam', 'ateam', ('name','away'), ('name','home')]
+
+        z = pd.DataFrame(self)
+        for c in z.columns:
+            if c in field_names:
+                z[c] = remap_val(z[c])
+
+        if z.index.nlevels == 1 and z.index.name in field_names:
+            z.set_index(pd.Index(remap_idx(z.index), name=z.index.name), inplace=True)
+        elif z.index.nlevels > 1:
+            for i in range(z.index.nlevels):
+                if z.index.names[i] in field_names:
+                    z.set_index(z.index.set_levels(remap_idx(z.index.levels[i]), level=i), inplace=True)
+
+        return z
+
+
+class NFLPlaysFrame(NFLDataFrame):
+
+    _metadata = ['gameInfo', 'host']
 
     @property
     def _constructor(self):
