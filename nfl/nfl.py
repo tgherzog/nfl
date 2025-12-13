@@ -467,16 +467,6 @@ class NFL():
  
             self.teams_[key] = team
 
-            (div,conf) = (team['div'],team['conf'])
-            if self.divs_.get(div) is None:
-                self.divs_[div] = set()
-
-            if self.confs_.get(conf) is None:
-                self.confs_[conf] = set()
-
-            self.divs_[div].add(key)
-            self.confs_[conf].add(key)
-
         # engine returns a flat dataframe
         g = self.engine.games(self, season)
         g['p'] = (g['hs'].isna()==False) & (g['as'].isna()==False)
@@ -491,6 +481,23 @@ class NFL():
         '''Perform cleanup operations after an update or load
         '''
 
+        # divs_ and confs_ are dicts contains sets of team codes for each conference
+        # and division. This are defined based on teams
+        self.divs_ = {}
+        self.confs_ = {}
+        for (key,team) in self.teams_.items():
+            (div,conf) = (team['div'],team['conf'])
+            if self.divs_.get(div) is None:
+                self.divs_[div] = set()
+
+            if self.confs_.get(conf) is None:
+                self.confs_[conf] = set()
+
+            self.divs_[div].add(key)
+            self.confs_[conf].add(key)
+
+        # seasons_ is a dict where values are sets of team codes for each season, internally used
+        # post will be undefined until regular season concludes
         self.seasons_ = {}
         teams = set(self.teams_.keys())
         for s in self.games_.index.get_level_values(0).unique():
@@ -533,14 +540,11 @@ class NFL():
 
         return z
 
-    def gameday(self, sort=True):
-        ''' Returns a gameday display for the current week. This resembles the scoreboard
+    @property
+    def thisweek(self):
+        ''' Returns a  display for the current week. This resembles the scoreboard
             but with less real-time information and more seasonal context.
 
-
-            sort: sorts output first by conference, then by matchup (division, conf, league)
-            to cluster 'interesting' games together. If set to False, output is sorted in the same
-            order as scoreboard
 
             Unlike scoreboard, this property does *not* update the game database with final
             scores. It will update, however, if other operations update the database. For example,
@@ -550,7 +554,7 @@ class NFL():
 
             stash = nfl.stash()      # save game state (optional)
             nfl.clear(nfl.week)      # erase scores for the current week
-            nfl.gameday()            # wlt, rank, streak etc now show status going *into* current week
+            nfl.thisweek             # wlt, rank, streak etc now show status going *into* current week
             nfl.autoUpdate=False     # optional: prevent future dashboards from updating the database
             nfl.restore(stash)       # restore game state (optional)
 
@@ -576,7 +580,7 @@ class NFL():
         # gameday has the same basic structure as the scoreboard
         # we get the scoreboard directly from the engine to prevent autoUpdate
         src = self.engine.scoreboard(self)
-        idx=pd.MultiIndex.from_product([['name','wlt','streak','rank'], ['away','home']])
+        idx=pd.MultiIndex.from_product([['team','wlt','streak','rank'], ['away','home']])
         idx = idx.append(pd.MultiIndex.from_product([['misc'],['match','status','broadcast']]))
         gd = NFLDataFrame(columns=idx)
         gd.host = self
@@ -594,7 +598,7 @@ class NFL():
             # key = '{}-{}'.format(row['ateam'], row['hteam'])
             key = k
             for (pos,t) in [('away',row['ateam']),('home',row['hteam'])]:
-                gd.loc[key, ('name',pos)] = t
+                gd.loc[key, ('team',pos)] = t
                 gd.loc[key, ('wlt',pos)] = '-'.join(wlt.loc[t].astype(str).tolist())
                 gd.loc[key, ('rank',pos)] = divrank(standings.loc[t])
                 gd.loc[key, ('streak', pos)] = fstreak(streak[t])
@@ -616,15 +620,7 @@ class NFL():
             else:
                 gd.loc[key, ('misc','match')] = 'league'
 
-            hconf = hdiv.split('-')[0]
-            gd.loc[key, ('misc','order')] = confpre[hconf] + orders[gd.loc[key, ('misc','match')]]
-            gd.loc[key, ('misc', 'gt')] = dates[row['hteam']]
-
-        gd[('misc','interest')] = pd.Series(range(len(gd)), index=gd.sort_values([('misc','order'),('misc','gt')]).index)
-        if sort:
-            gd.sort_values([('misc','interest'), ('misc', 'gt')], inplace=True)
-
-        return gd.drop([('misc','order'), ('misc', 'gt'), ('misc', 'interest')], axis=1).set_index(pd.Series(range(len(gd))))
+        return gd
 
     @property
     def standings(self):
@@ -1826,7 +1822,7 @@ class NFLDataFrame(pd.DataFrame):
             t = self.host.teams_
             return s.map(lambda x: '{} {:>3}'.format(t.get(x,{}).get('short').ljust(fd_size), x) if x in t else '')
 
-        field_names = ['opp', 'team', 'hteam', 'ateam', ('name','away'), ('name','home')]
+        field_names = ['opp', 'team', 'hteam', 'ateam', ('team','away'), ('team','home')]
 
         z = pd.DataFrame(self)
         for c in z.columns:
