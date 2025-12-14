@@ -716,12 +716,12 @@ class NFL():
             (ht,at) = (elem['ht'],elem['at'])
             if ordered:
                 if ht in teams or at in teams:
-                    for k,v in kwargs.items():
+                    for t,v in kwargs.items():
                         v = _v(v)
-                        if k == ht:
+                        if t == ht:
                             self.games_.loc[k, ['hs', 'as', 'p']] = [max(v,0), 1 if v==0 else 0, True]
                             break
-                        elif k == at:
+                        elif t == at:
                             self.games_.loc[k, ['as', 'hs', 'p']] = [max(v,0), 1 if v==0 else 0, True]
                             break
 
@@ -1611,7 +1611,7 @@ class NFLScenarioMaker():
        weeks = [17, 18]
        teams = ['LAC', 'DEN', 'CIN', 'IND', 'MIA']
        with NFLScenarioMaker(nfl, weeks, teams, ties=False) as s:
-          df = s.frame(['playoffs])
+          df = s.frame(['playoffs'])
           for option in s:
              z = len(df)
 
@@ -1628,7 +1628,7 @@ class NFLScenarioMaker():
     def __enter__(self):
         self.weeks = self.nfl._teams(self.weeks)
         self.teams = self.nfl._teams(self.teams)
-        self.stash = self.nfl.stash(inplace=True)
+        self.stash = self.nfl.stash()
         self.completed = self.nfl.schedule(self.teams, self.weeks, by='team')['wlt'].replace('', np.nan).dropna().index
         return self
 
