@@ -691,12 +691,12 @@ class NFL():
         # First argument can also be a series of scores or outcomes. Index must be a MultiIndex (week,team)
         if isinstance(wk, pd.Series):
             for w in wk.index.get_level_values(0).unique():
-                self.set(w, reset, ordered, **wk.xs(w).to_dict())
+                self.set(w, overwrite, ordered, **wk.xs(w).to_dict())
 
         elif isinstance(wk, dict):
             # deprecated
             for k,v in wk.items():
-                self.set(k, reset, ordered, **v)
+                self.set(k, overwrite, ordered, **v)
 
             return
 
@@ -1426,7 +1426,14 @@ class NFL():
         return r
 
     def wildcard(self, teams, seeds=3):
-        '''Run a wildcard analysis on the specified teams
+        '''Run a wildcard analysis on the specified teams. This consists
+           of running tiebreakers for all subsets of the specified teams.
+           The resulting DataFrame includes each subset and their tiebreaker
+           results.
+
+           I'm not sure how useful this actually is, so it may be removed
+           from a future update. The subsets subroutine may be useful on its
+           own though.
         '''
 
         def subsets(data, size, unique=True):
@@ -1472,7 +1479,9 @@ class NFL():
         df.index.name = 'tiebreaker'
         df.columns.name = 'order'
         for i in df.index:
-            df.loc[i] = self.tiebreaks(i.split()).index[:seeds]
+            tb = self.tiebreaks(i.split()).index[:seeds]
+            df.loc[i] = ''
+            df.loc[i, df.columns[:len(tb)]] = tb
 
         return df
 
@@ -1531,26 +1540,59 @@ class NFL():
         # single team code or integer
         return [teams]
 
-    def scenarios(self, weeks, teams, spots=1, ties=True):
+    def scenarios(self, teams, weeks, spots=1, ties=True):
         '''Returns a dataframe of scenarios and outcomes with the specified constraints
 
            This function is essentially a wrapper for NFLScenarioMaker with
-           the most common use case, i.e. determining playoff spots. You
+           the most common use cases, i.e. determining playoff spots. You
            can customize and optimize the model by implementing NFLScenarioMaker
            directly (see docs).
 
+           teams    list-like of teams for which to generate scenarios
 
            weeks    weeks for which to generate scenarios
 
-           teams    list-list of teams for which to generate scenarios
+           spots    Sets the number of eligible playoff spots for this analysis.
+                    For example, if set to 1 then only the top team will
+                    be playoff eligible for each scenario. This is how you
+                    typically would analysis potential division championships,
+                    passing a set of teams for a given division.
 
-           spots    number of available playoff spots. If 0, then NFLConference.playoffs
-                    is used to determine eligibility, instead of the
-                    general-purpose tiebreaker procedure. A value
-                    of 1 sets the analysis to "fast" mode, which is
-                    substantially more efficient
+                    If set to 0 then NFLConference.playoffs() determines
+                    eligibility. In this case, an additional sanity check
+                    is used to make sure teams are all from the same
+                    conference.
 
            ties     whether to include ties as possible outcomes
+
+           The resulting DataFrame will have 3**games rows, each row representing a unique
+           scenario and outcome, where rows is the number of games played collectively by teams in the
+           range of weeks. If ties=False the DataFrame will have 2**games rows.
+           The DataFrame will have a MultiIndex column format, the product of weeks
+           and teams, with an extra 1st level named 'playoffs' that includes Boolean columns
+           for each team indicating whether they test positive (based on the value of spots)
+           for that scenario.
+
+           The example below runs all possible scenarios for weeks 17 and 18, testing whether
+           NE or BUF have the superior record compared to each other. This can be used to
+           determine which team might win the division championship (NE and BUF are both AFC-East
+           teams), assuming that no other teams (i.e MIA and NYJ) are contenders.
+
+           >>> nfl.scenarios(['NE', 'BUF'], [17,18])
+           week    17         18        outcome       
+           team    NE  BUF    NE   BUF       NE    BUF
+           0     loss  win   win   win    False   True
+           1     loss  win   win  loss     True  False
+           . . .
+
+           Examples:
+
+           # determine which teams can still win their division after week15, not allowing for ties
+           nfl.scenarios('NFC-North', range(16,19), ties=False)
+
+           # determine playoff scenarios for an entire conference: this will take a *long* time
+           # if obvious ineligibles are not first weeded out
+           nfl.scenarios('AFC', [17, 18], spots=0)
         '''
 
         if spots == 0:
@@ -1566,20 +1608,20 @@ class NFL():
 
             conf = NFLConference(list(c)[0], self)
         
-        with NFLScenarioMaker(self, weeks, teams, ties) as gen:
-            df = gen.frame(['playoffs'])
+        with NFLScenarioMaker(self, teams, weeks, ties) as gen:
+            df = gen.frame(['outcome'])
             for option in gen:
                 x = len(df)
                 df.loc[x] = option
-                df.loc[x, 'playoffs'] = False
+                df.loc[x, 'outcome'] = False
                 self.set(option)
                 if spots == 0:
                     p = conf.playoffs()
-                    z = [('playoffs',i) for i in set(teams) & set(p.index)]
+                    z = [('outcome',i) for i in set(teams) & set(p.index)]
                     df.loc[x, z] = True
                 else:
                     tb = self.tiebreaks(teams, fast=(spots==1))
-                    z = [('playoffs',i) for i in tb.index[:spots]]
+                    z = [('outcome',i) for i in tb.index[:spots]]
                     df.loc[x, z] = True
 
             return df
@@ -1618,7 +1660,7 @@ class NFLScenarioMaker():
 
     '''
 
-    def __init__(self, nfl, weeks, teams, ties=True):
+    def __init__(self, nfl, teams, weeks, ties=True):
         self.nfl = nfl
         self.weeks = weeks
         self.teams = teams
@@ -1627,8 +1669,8 @@ class NFLScenarioMaker():
         self.completed = None
 
     def __enter__(self):
-        self.weeks = self.nfl._teams(self.weeks)
-        self.teams = self.nfl._teams(self.teams)
+        self.weeks = self.nfl._list(self.weeks)
+        self.teams = self.nfl._list(self.teams)
         self.stash = self.nfl.stash()
         self.completed = self.nfl.schedule(self.teams, self.weeks, by='team')['wlt'].replace('', np.nan).dropna().index
         return self
@@ -1658,8 +1700,8 @@ class NFLScenarioMaker():
         aresults = {'win': 'loss', 'loss': 'win', 'tie': 'tie'}
 
         nfl = self.nfl
-        teams = nfl._teams(self.teams)
-        weeks = nfl._teams(self.weeks)
+        teams = nfl._list(self.teams)
+        weeks = nfl._list(self.weeks)
 
         sch = nfl.schedule(teams, weeks, by='game')
         wlt = nfl.schedule(teams, weeks, by='team')['wlt'].replace('',np.nan)
@@ -1667,6 +1709,7 @@ class NFLScenarioMaker():
         values = ('win','loss','tie')
         if not self.ties:
             values = values[:-1]
+
         for row in outcomes([values] * len(sch)):
             sch['hscore'] = row
             for k,elem in sch.iterrows():
@@ -1685,7 +1728,20 @@ class NFLScenarioMaker():
         '''Return a DataFrame structured to hold the set of scenarios. Typically
            you call this in advance of iterating over the object.
 
-           extra specifiies additional level-0 column names
+           extra specifiies additional level-0 column names.
+
+           The resulting DataFrame will have a MultiIndex column that is the product
+           of weeks and teams, plus an extra set of team columns for each 1st-level
+           name in extra. For example:
+
+           >>> with NFLScenarioMaker(nfl, ['NE', 'BUF'], [17,18]) as gen:
+           ...   df = gen.frame(['divchamp'])
+           ...   df.loc[0] = np.nan # each row defines a unique scenario and outcome
+           ...   print(df)
+           ... 
+           week  17      18     divchamp    
+           team  NE BUF  NE BUF       NE BUF
+           0    NaN NaN NaN NaN      NaN NaN
 
            Typical example:
 
@@ -1705,8 +1761,8 @@ class NFLScenarioMaker():
                   nfl.loc[at, z] = 'x'
         '''
 
-        weeks = self.nfl._teams(self.weeks) + extra
-        teams = self.nfl._teams(self.teams)
+        weeks = list(self.nfl._list(self.weeks)) + extra
+        teams = self.nfl._list(self.teams)
         df = pd.DataFrame(columns=pd.MultiIndex.from_product([weeks, teams], names=['week', 'team']))
         return df.drop(self.completed, axis=1)
 
