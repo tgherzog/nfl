@@ -700,8 +700,7 @@ class NFL():
 
             return
 
-        if type(wk) is int:
-            wk = [wk]
+        wk = self._weeks(wk)
 
         teams = kwargs.keys()
         season = season or self.season
@@ -774,9 +773,7 @@ class NFL():
             raise RuntimeError('game data has not been updated or loaded. Call update or load')
 
         season = season or self.season
-
-        if type(weeks) is int:
-            weeks = range(weeks, weeks+1)
+        weeks = self._weeks(weeks)
 
         z = self.games_.xs(season)
         if weeks:
@@ -827,7 +824,7 @@ class NFL():
                        A conference: 'NFC'
 
         weeks:      week to return or list-like of week numbers
-                    Pass None for all weeks
+                    Pass None for all weeks. Pass -1 for the remaining season
 
         by:         Data orientation, either 'team' or 'game'
                         'game' will return unique games based on the team(s) you request.
@@ -837,6 +834,8 @@ class NFL():
                         'team' will return teams as rows; if two requested teams play
                         each other there will be two rows not one, with inverse 'home'
                         and 'away' designations. Additionally, 'bye' teams will be listed as empty rows
+
+        season:     Override self.season
 
         ts:         Return dates as Pandas datetime objects that can be used computationally,
                     otherwise (default) return an easily read string
@@ -849,8 +848,9 @@ class NFL():
 
         Examples
           nfl.schedule('MIN', by='team')   # Vikings schedule
-          nfl.schedule(weeks=range(3,8))   # schedule for weeks 3-6
+          nfl.schedule(weeks=range(3,8))   # schedule for weeks 3-7
           nfl.schedule(5)                  # shortcut for week 5: single ints are taken as a week number not a team
+          nfl.schedule('MIN', -1)          # Vikings remaining schedule (current week on)
 
         '''
 
@@ -872,7 +872,10 @@ class NFL():
                 # This is so we differentiate between a division/conference name and a team code
                 teams = teams2
 
-        weeks2 = self._list(weeks)
+        weeks2 = self._weeks(weeks)
+        if isinstance(weeks, int) and weeks < 1:
+            # similar: don't confuse -1 with an actual week number
+            weeks = weeks2
 
         if by == 'game':
             games = NFLDataFrame(self.gameFrame(teams=teams2, weeks=weeks2, allGames=True, season=season).copy())
@@ -1498,6 +1501,27 @@ class NFL():
 
         return 'tie'
 
+    def _weeks(self, weeks):
+
+        if type(weeks) is int:
+            if weeks <= 0:
+                return range(self.week,19)
+
+            return [weeks]
+
+        if weeks is None:
+            return None
+
+        if isinstance(weeks, pd.core.base.IndexOpsMixin):
+            # just need to cast
+            return list(weeks)
+
+        if hasattr(weeks, '__iter__'):
+            # assume no problems iterating
+            return weeks
+
+        # this shouldn't happen: maybe if they pass some sort of float?
+        return [weeks]
 
     def _list(self, teams):
         '''Transforms objects into list-likes. This is designed so that
@@ -1662,15 +1686,13 @@ class NFLScenarioMaker():
 
     def __init__(self, nfl, teams, weeks, ties=True):
         self.nfl = nfl
-        self.weeks = weeks
-        self.teams = teams
+        self.weeks = nfl._weeks(weeks)
+        self.teams = nfl._list(teams)
         self.ties = ties
         self.stash = None
         self.completed = None
 
     def __enter__(self):
-        self.weeks = self.nfl._list(self.weeks)
-        self.teams = self.nfl._list(self.teams)
         self.stash = self.nfl.stash()
         self.completed = self.nfl.schedule(self.teams, self.weeks, by='team')['wlt'].replace('', np.nan).dropna().index
         return self
@@ -1701,7 +1723,7 @@ class NFLScenarioMaker():
 
         nfl = self.nfl
         teams = nfl._list(self.teams)
-        weeks = nfl._list(self.weeks)
+        weeks = nfl._weeks(self.weeks)
 
         sch = nfl.schedule(teams, weeks, by='game')
         wlt = nfl.schedule(teams, weeks, by='team')['wlt'].replace('',np.nan)
@@ -1719,7 +1741,7 @@ class NFLScenarioMaker():
                 if (k[0],elem['ateam']) in s.index:
                     s[(k[0],elem['ateam'])] = aresults[elem['hscore']]
 
-            # skip scenarios that conflict with existing scores
+            # skip scenarios that conflict with existing outcomes
             if (wlt.fillna(s) == s).all():
                 yield s.drop(self.completed)
 
