@@ -437,6 +437,7 @@ class NFL():
 
         self.games_ = stash.games.copy()
         self.week   = stash.week
+        self.stats  = None
 
     def update(self, season=None):
         ''' Updates team and game data from the underlying API
