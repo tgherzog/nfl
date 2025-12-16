@@ -1725,15 +1725,28 @@ class NFLScenarioMaker():
         teams = nfl._list(self.teams)
         weeks = nfl._weeks(self.weeks)
 
-        sch = nfl.schedule(teams, weeks, by='game')
+        sch = nfl.schedule(teams, weeks, by='game')[['ateam','hscore','ascore']]
         wlt = nfl.schedule(teams, weeks, by='team')['wlt'].replace('',np.nan)
         s = pd.Series(index=pd.MultiIndex.from_product([weeks, teams], names=['week','team']), dtype=str)
         values = ('win','loss','tie')
         if not self.ties:
             values = values[:-1]
 
+        # calculate results of these games so we can efficiently eliminate ones that
+        # aren't possible
+        sch['hr'] = pd.Series(np.nan, dtype='object')
+        sch.loc[sch['hscore']>sch['ascore'], 'hr'] = 'win'
+        sch.loc[sch['hscore']<sch['ascore'], 'hr'] = 'loss'
+        sch.loc[sch['hscore']==sch['ascore'], 'hr'] = 'tie'
+        sch.drop(columns='ascore', inplace=True)
+
         for row in outcomes([values] * len(sch)):
             sch['hscore'] = row
+            # test to see if this scenario can exist
+            x = sch.dropna()
+            if (x['hscore'] != x['hr']).any():
+                continue
+
             for k,elem in sch.iterrows():
                 if k in s.index:
                     s[k] = elem['hscore']
@@ -1742,8 +1755,7 @@ class NFLScenarioMaker():
                     s[(k[0],elem['ateam'])] = aresults[elem['hscore']]
 
             # skip scenarios that conflict with existing outcomes
-            if (wlt.fillna(s) == s).all():
-                yield s.drop(self.completed)
+            yield s.drop(self.completed)
 
 
     def frame(self, extra=[]):
