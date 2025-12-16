@@ -1564,7 +1564,7 @@ class NFL():
         # single team code or integer
         return [teams]
 
-    def scenarios(self, teams, weeks, spots=1, ties=True):
+    def scenarios(self, teams, weeks, spots=1, ties=True, wrapper=None, wrapper_args={}):
         '''Returns a dataframe of scenarios and outcomes with the specified constraints
 
            This function is essentially a wrapper for NFLScenarioMaker with
@@ -1584,10 +1584,14 @@ class NFL():
 
                     If set to 0 then NFLConference.playoffs() determines
                     eligibility. In this case, an additional sanity check
-                    is used to make sure teams are all from the same
-                    conference.
+                    is made to ensure teams are all from the same conference.
 
            ties     whether to include ties as possible outcomes
+
+           wrapper  A class used to wrap the scenario iterator. This is typically
+                    used to implement progress bars
+
+           wrapper_args Arguments to instantiate the wrapper
 
            The resulting DataFrame will have 3**games rows, each row representing a unique
            scenario and outcome, where rows is the number of games played collectively by teams in the
@@ -1619,6 +1623,7 @@ class NFL():
            nfl.scenarios('AFC', [17, 18], spots=0)
         '''
 
+        teams = self._list(teams)
         if spots == 0:
             # ascertain the conference with sanity check
             conf_teams = {}
@@ -1631,8 +1636,11 @@ class NFL():
                 raise ValueError('Teams must all belong to the same conference')
 
             conf = NFLConference(list(c)[0], self)
+
+        if wrapper is None:
+            wrapper = NFLEmptyContextWrapper
         
-        with NFLScenarioMaker(self, teams, weeks, ties) as gen:
+        with NFLScenarioMaker(self, teams, weeks, ties) as gen, wrapper(gen, **wrapper_args) as w:
             df = gen.frame(['outcome'])
             for option in gen:
                 x = len(df)
@@ -1647,6 +1655,9 @@ class NFL():
                     tb = self.tiebreaks(teams, fast=(spots==1))
                     z = [('outcome',i) for i in tb.index[:spots]]
                     df.loc[x, z] = True
+
+                # update progress bars, etc
+                w.update(gen.n)
 
             return df
 
@@ -1695,10 +1706,18 @@ class NFLScenarioMaker():
     def __enter__(self):
         self.stash = self.nfl.stash()
         self.completed = self.nfl.schedule(self.teams, self.weeks, by='team')['wlt'].replace('', np.nan).dropna().index
+        self.n = -1
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.nfl.restore(self.stash)
+
+    def __len__(self):
+        types = 2
+        if self.ties:
+            types += 1
+
+        return types ** len(self.nfl.schedule(self.teams, self.weeks, by='game'))
 
     def __iter__(self):
         '''Iterate over possible scenarios
@@ -1722,8 +1741,8 @@ class NFLScenarioMaker():
         aresults = {'win': 'loss', 'loss': 'win', 'tie': 'tie'}
 
         nfl = self.nfl
-        teams = nfl._list(self.teams)
-        weeks = nfl._weeks(self.weeks)
+        teams = self.teams
+        weeks = self.weeks
 
         sch = nfl.schedule(teams, weeks, by='game')[['ateam','hscore','ascore']]
         wlt = nfl.schedule(teams, weeks, by='team')['wlt'].replace('',np.nan)
@@ -1740,9 +1759,12 @@ class NFLScenarioMaker():
         sch.loc[sch['hscore']==sch['ascore'], 'hr'] = 'tie'
         sch.drop(columns='ascore', inplace=True)
 
+        self.n = 0
         for row in outcomes([values] * len(sch)):
+            self.n += 1
             sch['hscore'] = row
-            # test to see if this scenario can exist
+
+            # test to see if this scenario can exist; reject if it conflicts with known outcomes
             x = sch.dropna()
             if (x['hscore'] != x['hr']).any():
                 continue
@@ -1756,6 +1778,7 @@ class NFLScenarioMaker():
 
             # skip scenarios that conflict with existing outcomes
             yield s.drop(self.completed)
+            self.n = 0
 
 
     def frame(self, extra=[]):
@@ -1845,6 +1868,25 @@ class NFLScoreboard():
 
         return z.drop('state',axis=1)
 
+class NFLEmptyContextWrapper():
+    ''' An empty wrapper to use in code requiring a context object when none
+        is specified by the user
+    '''
+
+    def __init__(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        pass
+
+    def update(self, n=1):
+        '''Conforms to the function in the tqdm package, which impelements progress bars
+        '''
+
+        pass
 
 class NFLPlayDescWrapper(str):
     '''Just a bit of syntax sugar to print a clean string to the console - no need to wrap in a print() function
