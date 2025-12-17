@@ -638,49 +638,84 @@ class NFL():
 
         return NFLConference('AFC', self)
 
-    def set(self, wk, overwrite=True, ordered=False, season=None, **kwargs):
+    def set(self, ref, overwrite=True, ordered=False, season=None, **kwargs):
         ''' Set the final score(s) for games and weeks. You can use this to create
             hypothetical outcomes and analyze the effect on team rankings. Scores
             are specified by team code and applied to the specified week's schedule.
             If the score is specified for only one team in a game, the score of the other
             team is assumed to be zero if not previously set.
 
-            wk:         week number or list-like of weeks
-            overwrite:  overwrite previously set scores
-            ordered:    scores specify outcomes only in order of priority
-            **kwargs    dict of team codes and scores
+            ref:        should be one of:
+                          an integer or list-like, specifying week numbers, with outcomes
+                          specified in **kwargs
 
-            If for any given game only one team score is provided, the other is assumed to be zero.
-            Use negative values to indicate 0-0 ties
+                          a dict, keyed by week numbers, containing dicts with team:outcome
+                          pairings
+
+                          a Pandas Series with a MultiIndex (week,team) outcomes
+
+            overwrite:  overwrite previously set outcomes
+
+            ordered:    **kwargs specify outcomes only in order of priority
+
+            **kwargs    dict of team codes and outcomes
+
+            Values in **kwargs or ref (if dict or Series) can be:
+
+                integers, taken as each team's final score, or
+
+                'win', 'loss' or 'tie' - mapped to 1, 0 and -1 respectively
+
+            You can explicitly set scores for both teams, but in many cases this is not necessary.
+            The function will set the missing team's score to a logical value for the outcome
+            you specify. For example, if one team's value is positive, and the other is missing
+            that is interpreted as a win (or a spread), and the missing team's score is set to 0.
+            Conversely, specifying 0 for only one team implies the other team wins and its score
+            is set to 1. Specifying -1 for only one team implies a 0-0 tie. Explicitly setting
+            incompatible values for both teams will yield illogical but consistent results
+            (e.g. win/win actually results in a tie)
 
             # typical examples
 
-            set(7, MIN=17, GB=10)
+            >>> nfl.set(7, MIN=17, GB=10)
 
             The above will set the score for the MIN/GB game in week 7 if
             MIN and GB play each other in that week. Otherwise, it will
             set each team's score respectively and default their opponent's scores
             to 0. Scores for bye teams in that week are ignored.
 
-            set(range(16,19), PHI=1)
+            >>> nfl.set(-1, PHI=1)
+            >>> nfl.set(-1, PHI='win')  # same thing
 
-            Assuming week 15 is finished, set PHI to win its remaining games
+            set PHI to win its remaining games
 
-            set(range(16, 19), PHI=0)
-            set(range(16, 19), reset=False, WSH=0)
+            >>> nfl.set(-1, PHI=0)
+            >>> nfl.set(-1, overwrite=False, WSH=0)
 
             Set PHI to lose its remaining games, and WSH to lose its remaining games, except
             against PHI. In that case, the first call would set WSH
             to win the head-to-head match, and the second call would ignore the WSH/PHI game
             because it had been previously set
 
-            set(range(16, 19), ordered=True, DAL=0, WSH=1, PHI=0, NYG=1)
+            >>> nfl.set(-1, ordered=True, DAL=0, WSH=1, PHI=0, NYG=1)
 
-            Use the following hierarchy to set outcomes in weeks 16-18:
+            Use the following hierarchy to set outcomes for the rest of the season:
               1) DAL loses
               2) WSH wins
               3) PHI loses (except against DAL)
               4) NYG wins (except against WSH)
+
+            >>> s = pd.Series([1, 0, 0, 1], index=pd.MultiIndex.from_tuples([(17,'DAL'),(17,'PHI'),(18,'NYG'),(18,'WSH')]))
+            >>> s
+            17  DAL    1
+                PHI    0
+            18  NYG    0
+                WSH    1
+            dtype: int64
+
+            >>> nfl.set(s, overwrite=False)
+
+            set values from a Series, for games that haven't been played yet
         '''
 
         # this mechanism allows keyword mapping to values
@@ -689,18 +724,19 @@ class NFL():
             return value_map.get(x, x)
 
         # First argument can also be a series of scores or outcomes. Index must be a MultiIndex (week,team)
-        if isinstance(wk, pd.Series):
-            for w in wk.index.get_level_values(0).unique():
-                self.set(w, overwrite, ordered, **wk.xs(w).to_dict())
+        if isinstance(ref, pd.Series):
+            for w in ref.index.get_level_values(0).unique():
+                self.set(w, overwrite, ordered, **ref.xs(w).to_dict())
 
-        elif isinstance(wk, dict):
-            # deprecated
-            for k,v in wk.items():
+            return
+
+        elif isinstance(ref, dict):
+            for k,v in ref.items():
                 self.set(k, overwrite, ordered, **v)
 
             return
 
-        wk = self._weeks(wk)
+        wk = self._weeks(ref)
 
         teams = kwargs.keys()
         season = season or self.season
@@ -1646,7 +1682,7 @@ class NFL():
                 x = len(df)
                 df.loc[x] = option
                 df.loc[x, 'outcome'] = False
-                self.set(option)
+                self.set(option, season='reg')
                 if spots == 0:
                     p = conf.playoffs()
                     z = [('outcome',i) for i in set(teams) & set(p.index)]
@@ -1658,6 +1694,8 @@ class NFL():
 
                 # update progress bars, etc
                 w.update(gen.n)
+
+            w.update(gen.r)
 
             return df
 
@@ -1693,20 +1731,40 @@ class NFLScenarioMaker():
           for option in s:
              z = len(df)
 
+       The "n" property is a counter that can be used to advance a progress indicator.
+       It equals the number of scenarios processed by the last iteration cycle (the iterator
+       does not return scenarios that conflict with the completed schedule).
+
+       The "r" property is a counter for the remaining number of iterations. You can use
+       this to "top off" a progress indicator at the end of iterative loop.
+
+       For example:
+       from tqdm import tqdm # implements progress bars
+       with NFLScenarioMaker(nfl, 'NFC-West', -1) as gen, tqdm(gen) as tq:
+          for s in gen:
+            tq.update(gen.n)
+
+          tq.update(gen.r)
     '''
+
+    n = None
+    t = None
 
     def __init__(self, nfl, teams, weeks, ties=True):
         self.nfl = nfl
-        self.weeks = nfl._weeks(weeks)
-        self.teams = nfl._list(teams)
+        self.weeks = list(nfl._weeks(weeks))
+        self.teams = list(nfl._list(teams))
         self.ties = ties
         self.stash = None
         self.completed = None
 
+        # all resulting DataFrames and Series should be sorted by team and week
+        self.teams.sort()
+        self.weeks.sort()
+
     def __enter__(self):
         self.stash = self.nfl.stash()
         self.completed = self.nfl.schedule(self.teams, self.weeks, by='team')['wlt'].replace('', np.nan).dropna().index
-        self.n = -1
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -1718,6 +1776,13 @@ class NFLScenarioMaker():
             types += 1
 
         return types ** len(self.nfl.schedule(self.teams, self.weeks, by='game'))
+
+    @property
+    def r(self):
+        if self.t is None:
+            return None
+
+        return len(self) - self.t
 
     def __iter__(self):
         '''Iterate over possible scenarios
@@ -1759,7 +1824,7 @@ class NFLScenarioMaker():
         sch.loc[sch['hscore']==sch['ascore'], 'hr'] = 'tie'
         sch.drop(columns='ascore', inplace=True)
 
-        self.n = 0
+        self.n = self.t = 0
         for row in outcomes([values] * len(sch)):
             self.n += 1
             sch['hscore'] = row
@@ -1777,6 +1842,7 @@ class NFLScenarioMaker():
                     s[(k[0],elem['ateam'])] = aresults[elem['hscore']]
 
             # skip scenarios that conflict with existing outcomes
+            self.t += self.n
             yield s.drop(self.completed)
             self.n = 0
 
