@@ -1884,9 +1884,9 @@ class NFLScenarioMaker():
                   nfl.loc[at, z] = 'x'
         '''
 
-        weeks = list(self.nfl._list(self.weeks)) + extra
-        teams = self.nfl._list(self.teams)
-        df = pd.DataFrame(columns=pd.MultiIndex.from_product([weeks, teams], names=['week', 'team']))
+        df = NFLScenarioFrame(columns=pd.MultiIndex.from_product([self.weeks+extra, self.teams], names=['week', 'team']))
+        df.extra = extra
+        df.nTeams = len(self.teams)
         return df.drop(self.completed, axis=1)
 
 
@@ -2036,6 +2036,19 @@ class NFLDataFrame(pd.DataFrame):
                     z.set_index(z.index.set_levels(remap_idx(z.index.levels[i]), level=i), inplace=True)
 
         return z
+
+class NFLScenarioFrame(pd.DataFrame):
+
+    _metadata = ['extra', 'nTeams']
+    extra = []
+    nTeams = None
+
+    @property
+    def I(self):
+        '''Return the dataframe with the week/team levels inverted
+        '''
+        s = len(self.extra)*self.nTeams * -1
+        return self.iloc[:, :s].reorder_levels([1,0],axis=1).sort_index(axis=1).join(self.iloc[:, s:].reorder_levels([1,0], axis=1))
 
 
 class NFLPlaysFrame(NFLDataFrame):
