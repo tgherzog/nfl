@@ -1414,27 +1414,20 @@ class NFL():
                 return r
 
             logging.debug(msg('1.1 (Begin)', teams))
+            subTeams = set(teams)
 
             # apply division tiebreakers if necessary. start by counting # of divisions
-            divs = {}
-            for elem in teams:
-                d = self.teams_[elem]['div']
-                if d not in divs:
-                    divs[d] = set()
+            if divRule:
+                z = stats.loc[teams] # NB: this will change row order
+                nDivs = len(z['div'].unique())
+                if nDivs > 1 and nDivs < len(z):
+                    subTeams = set(teams)
+                    for d in z['div'].unique():
+                        # top team for this division
+                        dtop = stats[stats.index.isin(z[z['div']==d].index)].index[0]
+                        subTeams -= set(z[z['div']==d].index.drop(dtop))
 
-                divs[d].add(elem)
-            
-            subTeams = set(teams)
-            if divRule and len(divs) > 1:
-                #  multiple divisions: eliminate all but the top team from each
-                for k,v in divs.items():
-                    if len(v) > 1:
-                        logging.debug(msg('2.1 (1 club/division)', v))
-                        s = self.tiebreaks(v, fast=True)
-                        subTeams -= v - {s.index[0]}
-
-                if len(subTeams) < len(teams):
-                    logging.debug(msg('2.2 (Pruned)', subTeams))
+                    logging.debug(msg('2.2 (1 club/division rule)', subTeams))
 
             # we first test the overall rule since that can be done inexpensively and hopefully
             # will eliminate a significant number of candidates. Otherwise,
