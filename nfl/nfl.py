@@ -1747,9 +1747,6 @@ class NFLScenarioMaker():
           tq.update(gen.r)
     '''
 
-    n = None
-    t = None
-
     def __init__(self, nfl, teams, weeks, ties=True):
         self.nfl = nfl
         self.weeks = list(nfl._weeks(weeks))
@@ -1757,6 +1754,8 @@ class NFLScenarioMaker():
         self.ties = ties
         self.stash = None
         self.completed = None
+        self.n = None
+        self.t = None
 
         # all resulting DataFrames and Series should be sorted by team and week
         self.teams.sort()
@@ -2040,15 +2039,80 @@ class NFLDataFrame(pd.DataFrame):
 class NFLScenarioFrame(pd.DataFrame):
 
     _metadata = ['extra', 'nTeams']
-    extra = []
-    nTeams = None
 
     @property
     def I(self):
         '''Return the dataframe with the week/team levels inverted
         '''
         s = len(self.extra)*self.nTeams * -1
-        return self.iloc[:, :s].reorder_levels([1,0],axis=1).sort_index(axis=1).join(self.iloc[:, s:].reorder_levels([1,0], axis=1))
+
+        z = self.iloc[:, :s].reorder_levels([1,0],axis=1).sort_index(axis=1).join(self.iloc[:, s:].reorder_levels([1,0], axis=1))
+        
+        # join doesn't carry over metadata so we have to do it ourselves
+        for elem in self._metadata:
+            z.__setattr__(elem, self.__getattr__(elem))
+
+        return z
+
+
+    def weeks(self, team):
+        '''Return weeks for the specified team
+        '''
+
+        # team/week columns could be inverted
+        level = 0 if self.columns.names[0] == 'team' else 1
+        return self.drop(columns=self.extra, level=1-level).xs(team, level=level, axis=1)
+
+    def test(self, team, *values):
+        '''Apply tests by week to a given team
+
+           team        Team code
+           
+           values      Test values for each week for that team ('win'|1,'loss'|-,'tie'|-1). Use
+                       None to ignore a given week
+        '''
+
+        z = self.weeks(team)
+
+        c = list(z.columns)
+
+        # a terse way to pad with None and trim to length
+        v = (list(values) + ([None] * (len(c)-len(values))))[:len(c)]
+
+        # now eliminate values and columns that are None
+        (c,v) = zip(*filter(lambda x: x[1] is not None, zip(c,v)))
+
+        c = list(c)
+        v = list(map(lambda x: self.vmap(x), v))
+
+        return z[c].eq(v).all(axis=1)
+
+    def st(self, team, outcome='win', op='count'):
+        '''Test summarized outcomes for a given team
+
+           team     team code
+
+           outcome  outcome to count
+
+           op       operation - one of:
+
+                    count: returns count of outcome
+                    all:   True if all weeks equal outcome, else False
+                    any:   True if any week equals outcome, else False
+        '''
+
+        z = self.weeks(team) == self.vmap(outcome)
+        if op == 'all':
+            return z.all(axis=1)
+        elif op == 'any':
+            return z.any(axis=1)
+
+        return z.sum(axis=1)
+
+    @staticmethod
+    def vmap(v):
+        vm = {1: 'win', 0: 'loss', -1: 'tie'}
+        return vm.get(v, v)
 
 
 class NFLPlaysFrame(NFLDataFrame):
