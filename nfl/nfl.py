@@ -1417,17 +1417,16 @@ class NFL():
             subTeams = set(teams)
 
             # apply division tiebreakers if necessary. start by counting # of divisions
-            if divRule:
-                z = stats.loc[teams] # NB: this will change row order
-                nDivs = len(z['div'].unique())
-                if nDivs > 1 and nDivs < len(z):
-                    subTeams = set(teams)
-                    for d in z['div'].unique():
-                        # top team for this division
-                        dtop = stats[stats.index.isin(z[z['div']==d].index)].index[0]
-                        subTeams -= set(z[z['div']==d].index.drop(dtop))
+            z = stats.loc[teams] # NB: this will change row order
+            divs = z['div'].value_counts()
 
-                    logging.debug(msg('2.2 (1 club/division rule)', subTeams))
+            # check if a) divRule in effect, b) are 2+ divisions, c) are 1+ divisions with 2+ clubs
+            if divRule and len(divs) > 1 and len(divs[divs>1]) > 0:
+                for d in divs[divs>1].index:
+                    # remove teams in this division except for the first
+                    subTeams -= set(stats[stats.index.isin(z[z['div']==d].index)].index[1:])
+
+                logging.debug(msg('2.2 (1 club/division rule)', subTeams))
 
             # we first test the overall rule since that can be done inexpensively and hopefully
             # will eliminate a significant number of candidates. Otherwise,
