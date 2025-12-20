@@ -718,13 +718,21 @@ class NFL():
             set values from a Series, for games that haven't been played yet
         '''
 
-        # this mechanism allows keyword mapping to values
-        value_map = {'win': 1, 'loss': 0, 'tie': -1}
-        def _v(x):
-            return value_map.get(x, x)
-
         # First argument can also be a series of scores or outcomes. Index must be a MultiIndex (week,team)
-        if isinstance(ref, pd.Series):
+        if isinstance(ref, NFLScenario):
+            c = ['as', 'hs', 'p']
+            for k,v in ref.items():
+                if v == 'win':
+                    self.games_.loc[k, c] = [0, 1, True]
+                elif v == 'loss':
+                    self.games_.loc[k, c] = [1, 0, True]
+                elif v == 'tie':
+                    self.games_.loc[k, c] = [0, 0, True]
+
+            self.stats = None
+            return
+
+        elif isinstance(ref, pd.Series):
             for w in ref.index.get_level_values(0).unique():
                 self.set(w, overwrite, ordered, **ref.xs(w).to_dict())
 
@@ -736,30 +744,35 @@ class NFL():
 
             return
 
-        wk = self._weeks(ref)
+        # this mechanism allows keyword mapping to values
+        value_map = {'win': 1, 'loss': 0, 'tie': -1}
+        def _v(x):
+            return value_map.get(x, x)
 
-        teams = kwargs.keys()
         season = season or self.season
-        inv = {0: 1, 1: 0, -1: 0}
+        wk = self._weeks(ref)
+        teams = kwargs.keys()
 
-        for (k,elem) in self.games_.iterrows():
-            if k[0] != season or elem['wk'] not in wk:
-                continue
+        gm = self.games_.xs(season)
+        idx = gm['wk'].isin(wk) & (gm['ht'].isin(teams) | gm['at'].isin(teams))
+        if not overwrite:
+            idx &= gm['p']==False
 
-            if elem['p'] and not overwrite:
-                continue
+        idx = gm[idx].index
 
+        for gid in idx:
+            k = (season,gid)
+            elem = self.games_.loc[k]
             (ht,at) = (elem['ht'],elem['at'])
             if ordered:
-                if ht in teams or at in teams:
-                    for t,v in kwargs.items():
-                        v = _v(v)
-                        if t == ht:
-                            self.games_.loc[k, ['hs', 'as', 'p']] = [max(v,0), 1 if v==0 else 0, True]
-                            break
-                        elif t == at:
-                            self.games_.loc[k, ['as', 'hs', 'p']] = [max(v,0), 1 if v==0 else 0, True]
-                            break
+                for t,v in kwargs.items():
+                    v = _v(v)
+                    if t == ht:
+                        self.games_.loc[k, ['hs', 'as', 'p']] = [max(v,0), 1 if v==0 else 0, True]
+                        break
+                    elif t == at:
+                        self.games_.loc[k, ['as', 'hs', 'p']] = [max(v,0), 1 if v==0 else 0, True]
+                        break
 
             elif ht in teams and at in teams:
                 self.games_.loc[k, ['hs', 'as', 'p']] = [max(_v(kwargs[ht]),0), max(_v(kwargs[at]),0), True]
@@ -1618,9 +1631,11 @@ class NFL():
            ties     whether to include ties as possible outcomes
 
            wrapper  A class used to wrap the scenario iterator. This is typically
-                    used to implement progress bars
+                    used to implement progress bars. If the class includes an 'update'
+                    function it is called after each scenario iteration, in the manner
+                    of the tqdm package
 
-           wrapper_args Arguments to instantiate the wrapper
+           wrapper_args Additionaal arguments to instantiate the wrapper
 
            The resulting DataFrame will have 3**games rows, each row representing a unique
            scenario and outcome, where rows is the number of games played collectively by teams in the
@@ -1670,10 +1685,15 @@ class NFL():
             wrapper = NFLEmptyContextWrapper
         
         with NFLScenarioMaker(self, teams, weeks, ties) as gen, wrapper(gen, **wrapper_args) as w:
+            try:
+                update = w.__getattribute__('update')
+            except:
+                update = None
+
             df = gen.frame(['outcome'])
             for option in gen:
                 x = len(df)
-                df.loc[x] = option
+                df.loc[x] = gen.to_frame(option)
                 df.loc[x, 'outcome'] = False
                 self.set(option, season='reg')
                 if spots == 0:
@@ -1686,9 +1706,8 @@ class NFL():
                     df.loc[x, z] = True
 
                 # update progress bars, etc
-                w.update(gen.n)
-
-            w.update(gen.r)
+                if update:
+                    update()
 
             return df
 
@@ -1708,6 +1727,12 @@ class NFL():
         return (__name__,globals())
 
 
+class NFLScenario(pd.Series):
+    '''A series of game outcomes created by NFLScenarioMaker. Values will
+       be one of 'win', 'loss' or 'tie', indexed by values in the *master*
+       games database
+    '''
+
 class NFLScenarioMaker():
     '''Facilitates generating and testing different win/lose/tie scenarios,
        typically to analyze the outcome on the playoff picture.
@@ -1724,20 +1749,10 @@ class NFLScenarioMaker():
           for option in s:
              z = len(df)
 
-       The "n" property is a counter that can be used to advance a progress indicator.
-       It equals the number of scenarios processed by the last iteration cycle (the iterator
-       does not return scenarios that conflict with the completed schedule).
+       NFCScenarioMaker is an iterable that you can use in wrappers like this, for
+       instance to add progress bars:
 
-       The "r" property is a counter for the remaining number of iterations. You can use
-       this to "top off" a progress indicator at the end of iterative loop.
-
-       For example:
-       from tqdm import tqdm # implements progress bars
-       with NFLScenarioMaker(nfl, 'NFC-West', -1) as gen, tqdm(gen) as tq:
-          for s in gen:
-            tq.update(gen.n)
-
-          tq.update(gen.r)
+       import
     '''
 
     n = None
@@ -1749,7 +1764,9 @@ class NFLScenarioMaker():
         self.teams = list(nfl._list(teams))
         self.ties = ties
         self.stash = None
+        self.games = None
         self.completed = None
+        self.incomplete = None
 
         # all resulting DataFrames and Series should be sorted by team and week
         self.teams.sort()
@@ -1757,7 +1774,19 @@ class NFLScenarioMaker():
 
     def __enter__(self):
         self.stash = self.nfl.stash()
-        self.completed = self.nfl.schedule(self.teams, self.weeks, by='team')['wlt'].replace('', np.nan).dropna().index
+
+        # get scope of games in this run
+        gm = self.nfl.games_
+        gm = gm[(gm.index.get_level_values(0)==self.nfl.season) & gm['wk'].isin(self.weeks) & \
+                    (gm['ht'].isin(self.teams) | gm['at'].isin(self.teams)) & (gm['p']==False)]
+
+        # The games index defines the structure for each scenario
+        self.games = gm[['wk','at','ht']]
+
+        # complete and incomplete are transformations of games.index, structured by [week,team]
+        sch = self.nfl.schedule(self.teams, self.weeks, by='team')
+        self.completed = sch.dropna().index
+        self.incomplete = sch.index.drop(self.completed)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -1768,14 +1797,7 @@ class NFLScenarioMaker():
         if self.ties:
             types += 1
 
-        return types ** len(self.nfl.schedule(self.teams, self.weeks, by='game'))
-
-    @property
-    def r(self):
-        if self.t is None:
-            return None
-
-        return len(self) - self.t
+        return types ** len(self.games)
 
     def __iter__(self):
         '''Iterate over possible scenarios
@@ -1795,50 +1817,12 @@ class NFLScenarioMaker():
                 for elem in x:
                     yield z + [elem]
 
-
-        aresults = {'win': 'loss', 'loss': 'win', 'tie': 'tie'}
-
-        nfl = self.nfl
-        teams = self.teams
-        weeks = self.weeks
-
-        sch = nfl.schedule(teams, weeks, by='game')[['ateam','hscore','ascore']]
-        wlt = nfl.schedule(teams, weeks, by='team')['wlt'].replace('',np.nan)
-        s = pd.Series(index=pd.MultiIndex.from_product([weeks, teams], names=['week','team']), dtype=str)
         values = ('win','loss','tie')
         if not self.ties:
             values = values[:-1]
 
-        # calculate results of these games so we can efficiently eliminate ones that
-        # aren't possible
-        sch['hr'] = pd.Series(np.nan, dtype='object')
-        sch.loc[sch['hscore']>sch['ascore'], 'hr'] = 'win'
-        sch.loc[sch['hscore']<sch['ascore'], 'hr'] = 'loss'
-        sch.loc[sch['hscore']==sch['ascore'], 'hr'] = 'tie'
-        sch.drop(columns='ascore', inplace=True)
-
-        self.n = self.t = 0
-        for row in outcomes([values] * len(sch)):
-            self.n += 1
-            sch['hscore'] = row
-
-            # test to see if this scenario can exist; reject if it conflicts with known outcomes
-            x = sch.dropna()
-            if (x['hscore'] != x['hr']).any():
-                continue
-
-            for k,elem in sch.iterrows():
-                if k in s.index:
-                    s[k] = elem['hscore']
-                
-                if (k[0],elem['ateam']) in s.index:
-                    s[(k[0],elem['ateam'])] = aresults[elem['hscore']]
-
-            # skip scenarios that conflict with existing outcomes
-            self.t += self.n
-            yield s.drop(self.completed)
-            self.n = 0
-
+        for row in outcomes([values] * len(self.games)):
+            yield NFLScenario(row, index=self.games.index, dtype=str)
 
     def frame(self, extra=[]):
         '''Return a DataFrame structured to hold the set of scenarios. Typically
@@ -1881,6 +1865,33 @@ class NFLScenarioMaker():
         teams = self.nfl._list(self.teams)
         df = pd.DataFrame(columns=pd.MultiIndex.from_product([weeks, teams], names=['week', 'team']))
         return df.drop(self.completed, axis=1)
+
+    def to_frame(self, option):
+        '''Converts an NFLScenario to week,team outcomes to a Series indexed by week,team.
+           The returned Series will have the same index structure as columns in an NFLScenarioFrame.
+           For example:
+
+           with NFLScenarioFrame(nfl, 'NFL-North', -1) as gen:
+                outcomes = gen.frame(['outcome'])
+                for scenario in gen:
+                    x = len(outcomes)
+                    outcomes.loc[x] = gen.to_teams(scenario)
+        '''
+
+        aresults = {'win': 'loss', 'loss': 'win', 'tie': 'tie'}
+        s = pd.Series('', index=self.incomplete, dtype=str)
+
+        # option must have the same index as self.games
+        for (k,row) in self.games.iterrows():
+            result = option.get(k, '')
+            if (row['wk'],row['ht']) in s.index:
+                s[(row['wk'],row['ht'])] = result
+
+            if (row['wk'],row['at']) in s.index:
+                s[(row['wk'],row['at'])] = aresults.get(result, '')
+
+        return s
+
 
 
 class NFLScoreboard():
@@ -1932,19 +1943,13 @@ class NFLEmptyContextWrapper():
         is specified by the user
     '''
 
-    def __init__(self):
+    def __init__(self, obj, **kwargs):
         pass
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        pass
-
-    def update(self, n=1):
-        '''Conforms to the function in the tqdm package, which impelements progress bars
-        '''
-
         pass
 
 class NFLPlayDescWrapper(str):
