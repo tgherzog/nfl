@@ -6,7 +6,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from .utils import current_season
+from .utils import current_season, vmap
 
 class NFLTeam():
     '''an NFL team, typically obtained by calling the NFL object with the team code
@@ -1717,13 +1717,6 @@ class NFL():
     def _name():
         return (__name__,globals())
 
-
-class NFLScenario(pd.Series):
-    '''A series of game outcomes created by NFLScenarioMaker. Values will
-       be one of 'win', 'loss' or 'tie', indexed by values in the *master*
-       games database
-    '''
-
 class NFLScenarioMaker():
     '''Facilitates generating and testing different win/lose/tie scenarios,
        typically to analyze the outcome on the playoff picture.
@@ -1757,6 +1750,7 @@ class NFLScenarioMaker():
         self.games = None
         self.completed = None
         self.incomplete = None
+
 
         # all resulting DataFrames and Series should be sorted by team and week
         self.teams.sort()
@@ -1812,7 +1806,7 @@ class NFLScenarioMaker():
             values = values[:-1]
 
         for row in outcomes([values] * len(self.games)):
-            yield NFLScenario(row, index=self.games.index, dtype=str)
+            yield NFLScenario(self, row, index=self.games.index)
 
     def frame(self, extra=[]):
         '''Return a DataFrame structured to hold the set of scenarios. Typically
@@ -1861,7 +1855,7 @@ class NFLScenarioMaker():
            The returned Series will have the same index structure as columns in an NFLScenarioFrame.
            For example:
 
-           with NFLScenarioFrame(nfl, 'NFL-North', -1) as gen:
+           with NFLScenarioMaker(nfl, 'NFC-North', -1) as gen:
                 outcomes = gen.frame(['outcome'])
                 for scenario in gen:
                     x = len(outcomes)
@@ -2029,6 +2023,47 @@ class NFLDataFrame(pd.DataFrame):
 
         return z
 
+class NFLScenario(pd.Series):
+    '''A series of game outcomes created by NFLScenarioMaker. Values will
+       be one of 'win', 'loss' or 'tie', indexed by values in the *master*
+       games database
+    '''
+
+    def __init__(self, host, data, index, name=None):
+        super().__init__(data, index=index, name=name, dtype=str)
+        self.host = host
+
+    def weeks(self, team):
+        '''Return a Series of outcomes for the specified team, one row per week
+        '''
+
+        x = self.host.games.join(self.rename('outcome'))
+        return x[(x['ht']==team) | (x['at']==team)]['outcome']
+
+    def st(self, team, outcome='win', op='count'):
+        '''Test summarized outcomes for a given team.
+
+           team     team code
+
+           outcome  outcome to count
+
+           op       operation - one of:
+
+                    count: returns count of outcome
+                    all:   True if all weeks equal outcome, else False
+                    any:   True if any week equals outcome, else False
+
+           The result will in all cases be a scalar
+        '''
+
+        z = self.weeks(team) == vmap(outcome)
+        if op == 'all':
+            return z.all()
+        elif op == 'any':
+            return z.any()
+
+        return z.sum()
+
 class NFLScenarioFrame(pd.DataFrame):
 
     _metadata = ['extra', 'nTeams']
@@ -2063,6 +2098,8 @@ class NFLScenarioFrame(pd.DataFrame):
            
            values      Test values for each week for that team ('win'|1,'loss'|-,'tie'|-1). Use
                        None to ignore a given week
+
+           The return is a DataFrame with the same index as the object and columns for each week
         '''
 
         z = self.weeks(team)
@@ -2076,7 +2113,7 @@ class NFLScenarioFrame(pd.DataFrame):
         (c,v) = zip(*filter(lambda x: x[1] is not None, zip(c,v)))
 
         c = list(c)
-        v = list(map(lambda x: self.vmap(x), v))
+        v = list(map(lambda x: vmap(x), v))
 
         return z[c].eq(v).all(axis=1)
 
@@ -2092,20 +2129,17 @@ class NFLScenarioFrame(pd.DataFrame):
                     count: returns count of outcome
                     all:   True if all weeks equal outcome, else False
                     any:   True if any week equals outcome, else False
+
+           The return is a Series of either counts or Booleans with the same index as the object
         '''
 
-        z = self.weeks(team) == self.vmap(outcome)
+        z = self.weeks(team) == vmap(outcome)
         if op == 'all':
             return z.all(axis=1)
         elif op == 'any':
             return z.any(axis=1)
 
         return z.sum(axis=1)
-
-    @staticmethod
-    def vmap(v):
-        vm = {1: 'win', 0: 'loss', -1: 'tie'}
-        return vm.get(v, v)
 
 
 class NFLPlaysFrame(NFLDataFrame):

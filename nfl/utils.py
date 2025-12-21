@@ -29,3 +29,7 @@ def current_season():
     '''
     dt = datetime.now()
     return dt.year if dt.month >= 4 else dt.year-1
+
+vmap_ = {1: 'win', 0: 'loss', -1: 'tie'}
+def vmap(v):
+    return vmap_.get(v, v)
