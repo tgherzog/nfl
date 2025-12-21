@@ -205,11 +205,12 @@ class NFLConference():
         champs = champs.reindex(self.host.tiebreaks(champs.index).index)
 
         # append all remaining teams in tiebreaker order
-        champs = pd.concat([champs, pd.Series('', index=self.host.tiebreaks(self.teams-set(champs.index)).index)])
-
-        # mark wildcard slots 1-3
-        champs.update(pd.Series(map(lambda x: 'Wildcard{}'.format(x), range(1,4)), index=champs[4:7].index))
-        champs.name = self.code
+        if count > len(champs):
+            champs = pd.concat([champs, pd.Series('', index=self.host.tiebreaks(self.teams-set(champs.index), limit=count-len(champs)).index)])
+            i = 1
+            for elem in champs[4:7].index:
+                champs[elem] = 'Wildcard{}'.format(i)
+                i += 1
 
         return champs[:count]
 
@@ -1318,20 +1319,20 @@ class NFL():
         return df
 
 
-    def tiebreaks(self, teams, fast=False, divRule=True):
+    def tiebreaks(self, teams, limit=None, divRule=True):
         '''Returns a series with the results of a robust tiebreaker analysis for teams
            Team codes comprise the series index in hierarchical order, while the series
            value indicates the rule (or basis) for each team besting the one below it
 
            teams     a list-like of team codes, or a division/conference code
 
-           fast      If true, then only return the highest ranking team. The function
-                     also takes measures to avoid expensive calculations if possible
+           limit     return once this number of tiebreakers has been determined
 
            divRule   Enforce the "one-club-per-division" rule as stated in the wildcard
                      tiebreaking procedures
         '''
         teams = list(self._list(teams))
+        limit = limit or len(teams)
         r = pd.Series(name='level')
 
         # shortcuts for efficiency: implement before call to _stats for speed
@@ -1340,7 +1341,7 @@ class NFL():
         elif len(teams) == 1:
             r[teams[0]] = 'overall'
             return r
-        elif fast:
+        elif limit == 1:
             # if only care about the winner, try to first discern based on overall pct
             if self.stats is None:
                 z = self.wlt(teams, season='reg')['pct']
@@ -1423,7 +1424,7 @@ class NFL():
             raise RuntimeError("Can't resolve tiebreaker: teams are essentially equal.{} ({})".format(suggest, ','.join(t)))
 
         while len(teams) > 1:
-            if fast and len(r) > 0:
+            if len(r) >= limit:
                 return r
 
             logging.debug(msg('1.1 (Begin)', teams))
@@ -1700,7 +1701,7 @@ class NFL():
                     z = [('outcome',i) for i in set(teams) & set(p.index)]
                     df.loc[x, z] = True
                 else:
-                    tb = self.tiebreaks(teams, fast=(spots==1))
+                    tb = self.tiebreaks(teams, limit=spots)
                     z = [('outcome',i) for i in tb.index[:spots]]
                     df.loc[x, z] = True
 
