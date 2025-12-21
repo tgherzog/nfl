@@ -1684,14 +1684,9 @@ class NFL():
         if wrapper is None:
             wrapper = NFLEmptyContextWrapper
         
-        with NFLScenarioMaker(self, teams, weeks, ties) as gen, wrapper(gen, **wrapper_args) as w:
-            try:
-                update = w.__getattribute__('update')
-            except:
-                update = None
-
+        with NFLScenarioMaker(self, teams, weeks, ties) as gen, wrapper(gen, **wrapper_args) as wgen:
             df = gen.frame(['outcome'])
-            for option in gen:
+            for option in wgen:
                 x = len(df)
                 df.loc[x] = gen.to_frame(option)
                 df.loc[x, 'outcome'] = False
@@ -1704,10 +1699,6 @@ class NFL():
                     tb = self.tiebreaks(teams, limit=spots)
                     z = [('outcome',i) for i in tb.index[:spots]]
                     df.loc[x, z] = True
-
-                # update progress bars, etc
-                if update:
-                    update()
 
             return df
 
@@ -1749,10 +1740,12 @@ class NFLScenarioMaker():
           for option in s:
              z = len(df)
 
-       NFCScenarioMaker is an iterable that you can use in wrappers like this, for
-       instance to add progress bars:
+       NFLScenarioMaker is an iterable that you can use in wrappers like this:
 
-       import
+       from tqdm import tqdm     # progress bar wrapper
+       with NFLScenarioMaker(nfl, 'NFC-North', -1) as gen, tqdm(gen) as tgen:
+          for scenario in tgen:
+            ...
     '''
 
     def __init__(self, nfl, teams, weeks, ties=True):
@@ -1763,12 +1756,7 @@ class NFLScenarioMaker():
         self.stash = None
         self.games = None
         self.completed = None
-<<<<<<< HEAD
         self.incomplete = None
-=======
-        self.n = None
-        self.t = None
->>>>>>> scenario-work
 
         # all resulting DataFrames and Series should be sorted by team and week
         self.teams.sort()
@@ -1946,6 +1934,7 @@ class NFLEmptyContextWrapper():
     '''
 
     def __init__(self, obj, **kwargs):
+        self.obj = obj
         pass
 
     def __enter__(self):
@@ -1953,6 +1942,9 @@ class NFLEmptyContextWrapper():
 
     def __exit__(self, exc_type, exc_value, traceback):
         pass
+
+    def __iter__(self):
+        return self.obj.__iter__()
 
 class NFLPlayDescWrapper(str):
     '''Just a bit of syntax sugar to print a clean string to the console - no need to wrap in a print() function
