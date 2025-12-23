@@ -1,6 +1,8 @@
 
 import pandas as pd
-from .utils import ivmap
+from .utils import ivmap, is_listlike
+from .sequence import reorder, expand, expand_len, expand_wid
+import math
 
 class NFLScenario(pd.Series):
     '''A series of game outcomes created by NFLScenarioMaker. Values will
@@ -379,3 +381,25 @@ class NFLTeamMatrix(pd.DataFrame):
 
 		return set(self.columns[:-1])
 
+
+class NFLSequenceMaker():
+
+    def __init__(self, source, n=1):
+        self.source = source
+        self.n = n
+
+    def __len__(self):
+
+        return expand_len(self.source, self.n) * math.factorial(expand_width(self.surce, self.n))
+
+    def __iter__(self):
+
+        for elems in self.expand():
+            yield from self.reorder(elems)
+
+    def reorder(self, elems):
+        yield from reorder(elems)
+
+
+    def expand(self):
+        yield from expand(self.source, self.n)

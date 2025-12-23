@@ -11,6 +11,11 @@ def safeInt(i):
 
     return i
 
+def is_listlike(ref):
+    '''Return if object is iterable and not a string
+    '''
+    return hasattr(ref, '__iter__') and not isinstance(ref, str)
+
 def to_seconds(s):
     '''Convert "mm:ss" to seconds
     '''
@@ -37,3 +42,4 @@ def vmap(v):
 ivmap_ = {'win': 1, 'loss': 0, 'tie': -1}
 def ivmap(v):
     return ivmap_.get(v, v)
+
