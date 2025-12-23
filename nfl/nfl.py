@@ -6,7 +6,8 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from .utils import current_season, vmap
+from .utils import current_season, vmap, ivmap
+from .analysis import NFLTeamMatrix
 
 class NFLTeam():
     '''an NFL team, typically obtained by calling the NFL object with the team code
@@ -639,7 +640,7 @@ class NFL():
 
         return NFLConference('AFC', self)
 
-    def set(self, ref, overwrite=True, ordered=False, season=None, **kwargs):
+    def set(self, ref, value=None, overwrite=True, ordered=False, season=None, **kwargs):
         ''' Set the final score(s) for games and weeks. You can use this to create
             hypothetical outcomes and analyze the effect on team rankings. Scores
             are specified by team code and applied to the specified week's schedule.
@@ -648,16 +649,24 @@ class NFL():
 
             ref:        should be one of:
                           an integer or list-like, specifying week numbers, with outcomes
-                          specified in **kwargs
+                          specified in **kwargs or value
 
                           a dict, keyed by week numbers, containing dicts with team:outcome
                           pairings
 
                           a Pandas Series with a MultiIndex (week,team) outcomes
 
+                          a NFLScenario
+
+            value:      specify team codes and outcomes in lieu of kwargs. This can be an
+                        NFLTeamMatrix, a Series (indexed by team codes) or a dict. In the
+                        case of NFLTeamMatrix you can use kwargs to specify outcomes
+                        not defined in the matrix. In other cases, kwargs are ignored
+
             overwrite:  overwrite previously set outcomes
 
-            ordered:    **kwargs specify outcomes only in order of priority
+            ordered:    **kwargs specify outcomes only (not scores), and in priority order.
+                        This also applies if ref or value is set to a Series or dict
 
             **kwargs    dict of team codes and outcomes
 
@@ -745,14 +754,19 @@ class NFL():
 
             return
 
-        # this mechanism allows keyword mapping to values
-        value_map = {'win': 1, 'loss': 0, 'tie': -1}
-        def _v(x):
-            return value_map.get(x, x)
+        elif isinstance(value, pd.Series):
+            self.set(w, overwrite, ordered, **value.to_dict())
+            return
+        elif isinstance(value, dict):
+            self.set(w, overwrite, ordered, **value)
+            return
 
         season = season or self.season
         wk = self._weeks(ref)
-        teams = kwargs.keys()
+        if isinstance(value, NFLTeamMatrix):
+            teams = value.teams | set(kwargs.keys())
+        else:
+            teams = kwargs.keys()
 
         gm = self.games_.xs(season)
         idx = gm['wk'].isin(wk) & (gm['ht'].isin(teams) | gm['at'].isin(teams))
@@ -765,9 +779,15 @@ class NFL():
             k = (season,gid)
             elem = self.games_.loc[k]
             (ht,at) = (elem['ht'],elem['at'])
+            if isinstance(value, NFLTeamMatrix):
+                t = value.score(ht,at)
+                if len(t) == 2:
+                    self.games_.loc[k, ['hs', 'as', 'p']] = [t[0], t[1], True]
+                    continue
+
             if ordered:
                 for t,v in kwargs.items():
-                    v = _v(v)
+                    v = ivmap(v)
                     if t == ht:
                         self.games_.loc[k, ['hs', 'as', 'p']] = [max(v,0), 1 if v==0 else 0, True]
                         break
@@ -776,10 +796,10 @@ class NFL():
                         break
 
             elif ht in teams and at in teams:
-                self.games_.loc[k, ['hs', 'as', 'p']] = [max(_v(kwargs[ht]),0), max(_v(kwargs[at]),0), True]
+                self.games_.loc[k, ['hs', 'as', 'p']] = [max(ivmap(kwargs[ht]),0), max(ivmap(kwargs[at]),0), True]
 
             elif ht in teams:
-                v = _v(kwargs[ht])
+                v = ivmap(kwargs[ht])
                 hscore = max(v,0)
                 if v < 0:
                     ascore = hscore
@@ -789,7 +809,7 @@ class NFL():
                 self.games_.loc[k, ['hs', 'as', 'p']] = [hscore, ascore, True]
 
             elif at in teams:
-                v = _v(kwargs[at])
+                v = ivmap(kwargs[at])
                 ascore = max(v,0)
                 if v < 0:
                     hscore = ascore
@@ -1116,7 +1136,7 @@ class NFL():
 
         return stats
 
-    def wlt(self, teams=None, within=None, weeks=None, season=None):
+    def wlt(self, teams=None, within=None, weeks=None, allGames=False, season=None, result='short'):
         '''Return the wlt stats of one or more teams
 
         teams:  team code or list of team codes
@@ -1126,28 +1146,13 @@ class NFL():
         weeks:  limit to specified weeks
 
         season: override default season
-        '''
 
-        return self._wlt(teams=teams, within=within, weeks=weeks, season=season)[0].drop(['scored','allowed'], axis=1)
+        allGames: return all games (includes unplayed games)
 
-    def matrix(self, teams=None, weeks=None, allGames=False, season=None):
-        '''Return a matrix of teams and the number of games played against each other
-
-        teams:  team code or list of team codes
-
-        weeks:  limit to specified weeks
-
-        allGames: if True, include games that haven't been played yet
-
-        season: override default season
-        '''
-
-        return self._wlt(teams, weeks=weeks, allGames=allGames, season=season)[1]
-
-
-    def _wlt(self, teams=None, within=None, weeks=None, allGames=False, season=None):
-        ''' Internal function for calculating wlt and matrix from games database
-        options to calculate ancillary data. Options are same as for wlt() and matrix()
+        result: the type of result needed. 'short' is by far the most common, but you can also specify
+                'long' - include score columns
+                'extended' - return a tuple, first element is the long-style wlt table, 2nd element
+                is a team matrix of games played against each other
         '''
 
         teams  = self._list(teams)
@@ -1191,7 +1196,12 @@ class NFL():
         df['pct'] = (df['win'] + df['tie'] * 0.5) / df.drop(columns=['scored','allowed'], errors='ignore').sum(axis=1)
         df.sort_values('pct', ascending=False, inplace=True)
         
-        return (df, m)
+        if result == 'long':
+            return df
+        elif result == 'extended':
+            return (df, m)
+
+        return df.drop(columns=['scored','allowed'])
 
     def team_stats(self, team):
         '''Return stats for a single team
@@ -1265,8 +1275,8 @@ class NFL():
         if self.netTouchdowns:
             df.loc['net-touchdowns'] = np.nan
 
-        (h2h,gm) = self._wlt(teams, within=teams, season='reg')
-        co  = self._wlt(teams, within=common_opponents, season='reg')[0]
+        (h2h,gm) = self.wlt(teams, within=teams, season='reg', result='extended')
+        co  = self.wlt(teams, within=common_opponents, season='reg', result='long')
 
         for team in teams:
             df.loc['overall', team] = stats.loc[team,'overall'].values

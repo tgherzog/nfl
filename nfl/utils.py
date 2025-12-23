@@ -33,3 +33,7 @@ def current_season():
 vmap_ = {1: 'win', 0: 'loss', -1: 'tie'}
 def vmap(v):
     return vmap_.get(v, v)
+
+ivmap_ = {'win': 1, 'loss': 0, 'tie': -1}
+def ivmap(v):
+    return ivmap_.get(v, v)
