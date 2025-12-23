@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from .utils import current_season, vmap, ivmap
-from .analysis import NFLTeamMatrix, NFLScenario, NFLScenarioMaker
+from .analytics import NFLTeamMatrix, NFLScenario, NFLScenarioMaker
 
 class NFLTeam():
     '''an NFL team, typically obtained by calling the NFL object with the team code
