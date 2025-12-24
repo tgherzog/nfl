@@ -310,6 +310,8 @@ class NFL():
             meta = pd.read_excel(reader, sheet_name='meta', index_col=0)
 
         self.year = meta.loc['Year', 'value']
+        if not self.week and 'Week' in meta.index:
+            self.week = meta.loc['Week', 'value']
 
         key = meta.loc['Engine', 'value'].split('.')
         engine = getattr(sys.modules['.'.join(key[:-1])], key[-1])
@@ -332,6 +334,7 @@ class NFL():
         meta.loc['Last Updated', 'value'] = datetime.now()
         meta.loc['Engine', 'value'] = '.'.join([self.engine.__class__.__module__, self.engine.__class__.__name__])
         meta.loc['Year', 'value'] = self.year
+        meta.loc['Week', 'value'] = self.week
 
         with pd.ExcelWriter(path) as writer:
             teams.to_excel(writer, sheet_name='teams')
