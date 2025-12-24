@@ -54,22 +54,12 @@ def expand(source, n=1):
             if is_listlike(t):
                 sz = n if n > 0 else len(t)+n
 
-                if n != 0 and sz <= len(t):
+                if n != 0 and sz > 0 and sz <= len(t):
                     for sub in subset(t, sz):
                         yield from chunk(elems[1:], z=z+sub, n=n)
                 else:
                     yield from chunk(elems[1:], z=z, n=n)
 
-                # if n < 0:
-                #     sz = max(len(t)+n, 0)
-                # else:
-                #     sz = min(n, len(t))
-
-                # if sz > 0:
-                #     for i in range(len(t)+1-sz):
-                #         yield from chunk(elems[1:], z=z+t[i:i+sz], n=n)
-                # else:
-                #     yield from chunk(elems[1:], z=z, n=n)
             else:
                 yield from chunk(elems[1:], z=z+elems[:1], n=n)
 
@@ -128,9 +118,6 @@ def subset(source, n=1):
 
         for i in range(len(elems)):
             yield from chunk(elems[i+1:], n-1, z+elems[i:i+1])
-
-#    if n < 0:
-#        n = len(elems)+n
 
     yield from chunk(source, n, [])
 
