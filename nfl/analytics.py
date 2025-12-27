@@ -72,22 +72,56 @@ class NFLScenario(pd.Series):
         return s
 
 class NFLScenarioFrame(pd.DataFrame):
+    '''A special DataFrame used for analyzing scenarios. Columns are
+       a 2-level MultiIndex consisting of weeks in level 0 and teams in level 1.
+       Additional columns are typically also included, so long as their
+       level-0 columns names are strings not ints, which is now the class
+       identifies week columns
+    '''
+    
+    @property
+    def wt_len(self):
+        '''Returns the number of week/team columns in the dataframe
+        '''
 
-    _metadata = ['extra', 'nTeams']
+        level = 0 if self.columns.names[0] == 'week' else 1
+        for n in range(len(self.columns)):
+            if type(self.columns[n][level]) is not int:
+                return n
+
+        return len(self.columns)
 
     @property
     def I(self):
         '''Return the dataframe with the week/team levels inverted
         '''
-        s = len(self.extra)*self.nTeams * -1
 
-        z = self.iloc[:, :s].reorder_levels([1,0],axis=1).sort_index(axis=1).join(self.iloc[:, s:].reorder_levels([1,0], axis=1))
-        
-        # join doesn't carry over metadata so we have to do it ourselves
-        for elem in self._metadata:
-            z.__setattr__(elem, self.__getattr__(elem))
+        # week columns are assumed to be at the beginning of the dataframe
+        n = self.wt_len
+        return self.iloc[:, :n].reorder_levels([1,0], axis=1).sort_index(axis=1).join(self.iloc[:, n:].reorder_levels([1, 0], axis=1).sort_index(level=0, axis=1,sort_remaining=False))
 
-        return z
+    
+    @property
+    def X(self):
+        '''Return an extended frame with summary info
+        '''
+
+        level = 0 if self.columns.names[0] == 'team' else 1
+        n = self.wt_len
+        teams = self.columns[:n].get_level_values(level).unique()
+        elems = ['win','loss','tie']
+        x = pd.DataFrame(columns=pd.MultiIndex.from_product([elems, teams], names=['week','team']), index=self.index)
+        for elem in elems:
+            for t in teams:
+                x[(elem, t)] = self.st(t, elem)
+
+        if (self.iloc[:, :n]=='tie').any(axis=None) == False:
+            x.drop(columns='tie', level=0, inplace=True)
+
+        if level == 0:
+            return self.iloc[:, :n].join( self.iloc[:, n:].join(x.reorder_levels([1,0], axis=1)).sort_index(level=0, axis=1, sort_remaining=False) )
+
+        return self.join(x)
 
 
     def weeks(self, team):
@@ -96,7 +130,8 @@ class NFLScenarioFrame(pd.DataFrame):
 
         # team/week columns could be inverted
         level = 0 if self.columns.names[0] == 'team' else 1
-        return self.drop(columns=self.extra, level=1-level).xs(team, level=level, axis=1)
+        n = self.wt_len
+        return self.iloc[:, :n].xs(team, level=level, axis=1)
 
     def test(self, team, *values):
         '''Apply tests by week to a given team
@@ -278,8 +313,6 @@ class NFLScenarioMaker():
         '''
 
         df = NFLScenarioFrame(columns=pd.MultiIndex.from_product([self.weeks+extra, self.teams], names=['week', 'team']))
-        df.extra = extra
-        df.nTeams = len(self.teams)
         return df.drop(self.completed, axis=1)
 
 

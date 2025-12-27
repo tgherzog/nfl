@@ -657,7 +657,7 @@ class NFL():
                           a dict, keyed by week numbers, containing dicts with team:outcome
                           pairings
 
-                          a Pandas Series with a MultiIndex (week,team) outcomes
+                          a Pandas Series with a MultiIndex (index.name=['week','team]) outcomes
 
                           a NFLScenario
 
@@ -746,8 +746,9 @@ class NFL():
             return
 
         elif isinstance(ref, pd.Series):
-            for w in ref.index.get_level_values(0).unique():
-                self.set(w, overwrite, ordered, **ref.xs(w).to_dict())
+            for w in ref.index.get_level_values('week').unique():
+                if type(w) is int:
+                    self.set(w, overwrite, ordered, **ref.xs(w, level='week').to_dict())
 
             return
 
