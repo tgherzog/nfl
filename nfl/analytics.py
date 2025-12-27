@@ -46,8 +46,8 @@ class NFLScenario(pd.Series):
         return z.sum()
 
     def to_frame(self):
-        '''Converts an NFLScenario to week,team outcomes to a Series indexed by week,team.
-           The returned Series will have the same index structure as columns in an NFLScenarioFrame.
+        '''Converts an NFLScenario of game outcomes to a Series indexed by week,team.
+           The returned Series will have the same index structure as weekly columns in an NFLScenarioFrame.
            For example:
 
            with NFLScenarioMaker(nfl, 'NFC-North', -1) as gen:
@@ -57,8 +57,7 @@ class NFLScenario(pd.Series):
                     outcomes.loc[x] = scenario.to_frame()
         '''
 
-        aresults = {'win': 'loss', 'loss': 'win', 'tie': 'tie'}
-        s = pd.Series('', index=self.host.incomplete, dtype=str)
+        s = pd.Series('', index=self.host.incomplete, dtype=str, name='outcome')
 
         # this object must have the same index as self.host.games
         for (k,row) in self.host.games.iterrows():
@@ -67,9 +66,29 @@ class NFLScenario(pd.Series):
                 s[(row['wk'],row['ht'])] = result
 
             if (row['wk'],row['at']) in s.index:
-                s[(row['wk'],row['at'])] = aresults.get(result, '')
+                s[(row['wk'],row['at'])] = self.host.aresults[result]
 
         return s
+
+    def to_wlt(self):
+        '''Converts an NFLScenario to a win-loss-tie summary consistent with what NFL.wlt returns
+        '''
+
+        z = pd.DataFrame(0, columns=['win','loss','tie'], index=self.host.teams)
+        for (k,row) in self.items():
+            gm = self.host.games.loc[k]
+            if gm['ht'] in z.index:
+                z.loc[gm['ht'], row] += 1
+
+            if gm['at'] in z.index:
+                z.loc[gm['at'], self.host.aresults[row]] += 1
+
+        return z
+
+        # z = self.to_frame().reset_index().groupby(['team', 'outcome']).count().unstack().xs('week', axis=1)
+        # x = pd.DataFrame(0, columns=['win','loss','tie'], index=z.index)
+        # x.loc[:, z.columns] = z
+        # return x
 
 class NFLScenarioFrame(pd.DataFrame):
     '''A special DataFrame used for analyzing scenarios. Columns are
@@ -218,6 +237,10 @@ class NFLScenarioMaker():
         self.completed = None
         self.incomplete = None
 
+        # fixed array, used by related classes, declared here for efficiency
+        # defines 'opposing' outcomes
+        self.aresults = {'win': 'loss', 'loss': 'win', 'tie': 'tie'}
+
 
         # all resulting DataFrames and Series should be sorted by team and week
         self.teams.sort()
@@ -268,12 +291,15 @@ class NFLScenarioMaker():
                 for elem in x:
                     yield z + [elem]
 
+        s = NFLScenario(self, 0, index=self.games.index, name='outcome')
         values = ('win','loss','tie')
         if not self.ties:
             values = values[:-1]
 
         for row in outcomes([values] * len(self.games)):
-            yield NFLScenario(self, row, index=self.games.index)
+            s[:] = row
+            yield s
+            # yield NFLScenario(self, row, index=self.games.index)
 
     def frame(self, extra=[]):
         '''Return a DataFrame structured to hold the set of scenarios. Typically
