@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from .utils import current_season, vmap, ivmap
-from .analytics import NFLTeamMatrix, NFLScenario, NFLScenarioMaker
+from .analytics import NFLTeamMatrix, NFLGameMatrix, NFLScenario, NFLScenarioMaker
 
 class NFLTeam():
     '''an NFL team, typically obtained by calling the NFL object with the team code
@@ -1170,9 +1170,7 @@ class NFL():
         df.index.name = 'team'
 
         # define a matrix of games played against opponents
-        m = pd.DataFrame(0, index=list(teams), columns=list(teams))
-        for t in teams:
-            m.loc[t, t] = np.nan
+        m = NFLGameMatrix(teams)
 
         for game in self.games(teams, weeks=weeks, allGames=allGames, season=season):
             if game['ht'] in teams and (within is None or game['at'] in within):
@@ -1183,7 +1181,10 @@ class NFL():
                     df.loc[game['ht'], 'allowed'] += game['as']
 
                 if game['at'] in m.columns:
-                    m.loc[game['ht'], game['at']] += 1
+                    if z == 'win':
+                        m.loc[game['ht'], game['at']] += 1
+                    elif z == 'tie':
+                        m.loc[game['ht'], game['at']] += 0.5
 
             if game['at'] in teams and (within is None or game['ht'] in within):
                 z = NFL.result(game['as'], game['hs'])
@@ -1194,7 +1195,10 @@ class NFL():
 
 
                 if game['ht'] in m.columns:
-                    m.loc[game['at'], game['ht']] += 1                
+                    if z == 'win':
+                        m.loc[game['at'], game['ht']] += 1
+                    elif z == 'tie':
+                        m.loc[game['at'], game['ht']] += 0.5
 
 
         df['pct'] = (df['win'] + df['tie'] * 0.5) / df.drop(columns=['scored','allowed'], errors='ignore').sum(axis=1)
@@ -1306,7 +1310,7 @@ class NFL():
                 df.loc['net-touchdowns', (team,'pct')] = ntd.get(team, np.nan)
 
             # sanity checks: we use inf to indicate that the column should be ignored
-            if not gm.isin([np.nan, gm.iloc[0,1]]).all().all():
+            if not gm.same():
                 # all teams must have played each other the same number of games or h2h is invalid
                 df.loc['head-to-head', (team,'pct')] = np.inf
 
