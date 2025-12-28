@@ -275,11 +275,8 @@ class NFLSourceESPN(NFLSource):
                 ela = drive['timeElapsed']['displayValue']
                 out = drive.get('displayResult', '')
                 seq = smax.get(t, -1) + 1
-                if t == game['ht']:
-                    pts = drive['plays'][-1]['homeScore'] - drive['plays'][0]['homeScore']
-                else:
-                    pts = drive['plays'][-1]['awayScore'] - drive['plays'][0]['awayScore']
 
+                pts = (drive['plays'][-1]['homeScore'] + drive['plays'][-1]['awayScore']) - (drive['plays'][0]['homeScore'] + drive['plays'][0]['awayScore'])
                 if pts > 0:
                     ascore = drive['plays'][-1]['awayScore']
                     hscore = drive['plays'][-1]['homeScore']
