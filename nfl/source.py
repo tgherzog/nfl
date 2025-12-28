@@ -37,9 +37,4 @@ class NFLSource():
 
         raise NotImplementedError('{} does not implement team rosters'.format(self.__class__.__name__))
 
-    def net_touchdowns(self, nfl, teams):
-        '''Return a dict of net touchdowns for specified teams
-        '''
-
-        raise NotImplementedError('{} does not implement net touchdowns'.format(self.__class__.__name__))
 

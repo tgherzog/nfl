@@ -1140,6 +1140,49 @@ class NFL():
 
         return stats
 
+    def net_stats(self, teams, type='Touchdown', season=None, wrapper=None, wrapper_args={}):
+        '''Returns a dict of game statistics for the specified teams.
+           The statistics are the sum of "net" game events; that is, events achieved by each
+           team less those achieved by their opponent. This is primarily designed
+           to compute "net touchdowns" for tiebreaker computations, but theoretically could
+           be used for field goals, interceptions, safeties, etc
+        '''
+
+        # Some actions may be characterized in multiple ways, for instance, defensive touchdowns
+        # The methods dict provides for this, and negative values count in reverse
+        methods = {
+          'Touchdown': {'Touchdown': 1, 'Interception Touchdown': -1}
+        }
+
+        teams = self._list(teams)
+        season = season or self.season
+        tds = dict.fromkeys(teams, 0)
+
+        method = methods.get(type, {type: 1})
+
+        # FIXME: implement a complete game generator in lieu of this kludge
+        if wrapper:
+            pb = wrapper(total=len(self.gameFrame(teams, season=season)), **wrapper_args)
+        else:
+            pb = None
+
+        for game in self.games(teams, season=season):
+            (ht,at) = (game['ht'],game['at'])
+            drives = self.engine.drives(self, game)
+            if pb:
+                pb.update()
+
+            for (k,v) in method.items():
+                t = drives[drives['result']==k].reset_index().groupby('team').count()['pts']
+                ht_td = (t.get(ht, 0) - t.get(at, 0)) * v
+                if ht in teams:
+                    tds[ht] += ht_td
+
+                if at in teams:
+                    tds[at] -= ht_td
+
+        return tds
+
     def wlt(self, teams=None, within=None, weeks=None, allGames=False, season=None, result='short'):
         '''Return the wlt stats of one or more teams
 
@@ -1249,7 +1292,7 @@ class NFL():
         divisions = set()
         stats = self._stats()
         if self.netTouchdowns:
-            ntd = self.engine.net_touchdowns(self, teams)
+            ntd = self.net_stats(teams)
         else:
             ntd = {}
 
