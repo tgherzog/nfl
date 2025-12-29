@@ -94,10 +94,11 @@ class NFLTeam():
         return self.host.streak(self.code)
 
 
-    def plays(self, count=10, week=None, season=None):
+    def plays(self, drive=None, count=None, week=None, season=None):
         '''Returns most recent plays from the specified game.
 
-           count:   number of most recent plays to return
+           drive:   drive number (the index from the DataFrame returned by NFLTeam.drives())
+           count:   number of most recent plays to return. If None, defaults to 10 unless drive is specified
            week:    game week; otherwise, the current week
 
            Note that the returned object is a DataFrame wrapper with an extra
@@ -115,8 +116,11 @@ class NFLTeam():
         else:
             game = self.active_game
 
+        if drive is None and count is None:
+            count = 10
+
         if game is not None:
-            return self.host.engine.plays(self.host, game, count)
+            return self.host.engine.plays(self.host, game, drive, count)
 
     def drives(self, week=None, season=None):
         '''Returns drive summary from the specified game as a DataFrame

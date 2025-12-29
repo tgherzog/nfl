@@ -225,7 +225,7 @@ class NFLSourceESPN(NFLSource):
 
             return df
 
-    def plays(self, nfl, game, count):
+    def plays(self, nfl, game, drive, count):
 
         if game is not None:
             result = self.gameinfo(game.name)
@@ -233,23 +233,29 @@ class NFLSourceESPN(NFLSource):
             if not result.get('drives'):
                 return None         # future games have no drive data
 
-            df = NFLPlaysFrame(columns=['team', 'codes', 'period', 'clock', 'score', 'down', 'loc', 'yds', 'type', 'desc'])
+            df = NFLPlaysFrame(columns=['team', 'drive', 'codes', 'period', 'clock', 'score', 'down', 'loc', 'yds', 'type', 'desc'])
             df.gameInfo = '{} v {} (week {})'.format(game['at'], game['ht'], game['wk'])
             df.host = nfl
-            for drive in result['drives']['previous']:
-                for play in drive['plays']:
+            n = 0
+            for drv in result['drives']['previous']:
+                for play in drv['plays']:
                     codes = 'S' if play['scoringPlay'] else ''
                     if 'team' in play['start'] and 'team' in play['end']:
                         if play['start']['team']['id'] != play['end']['team']['id']:
                             codes += 'T'
 
-                    df.loc[len(df)] = [drive['team']['abbreviation'], codes, play['period']['number'], play['clock']['displayValue'],
+                    df.loc[len(df)] = [drv['team']['abbreviation'], n, codes, play['period']['number'], play['clock']['displayValue'],
                         '{}-{}'.format(play['awayScore'], play['homeScore']),
                         play['start'].get('shortDownDistanceText',''),
                         play['start'].get('possessionText',''), play.get('statYardage',np.nan), play['type']['text'], play['text']
                     ]
 
-            if count > 0:
+                n += 1
+
+            if drive is not None:
+                df = df[df['drive']==drive]
+
+            if count is not None and count > 0:
                 return df.iloc[-count:]
 
             return df
@@ -262,9 +268,8 @@ class NFLSourceESPN(NFLSource):
             if not result.get('drives'):
                 return None         # future games have no drive data
 
-            df = NFLDataFrame(columns=['period','start','pos','plays','yds','elapsed','result', 'pts', game['at'], game['ht']], index=pd.MultiIndex.from_product([[],[]], names=('team','seq')))
+            df = NFLDataFrame(columns=['team', 'period','start','pos','plays','yds','elapsed','result', 'pts', game['at'], game['ht']])
             df.host = nfl
-            smax = {}
             for drive in result['drives']['previous']:
                 t   = drive['team']['abbreviation']
                 per = drive['start']['period']['number']
@@ -274,7 +279,6 @@ class NFLSourceESPN(NFLSource):
                 yds = drive['yards']
                 ela = drive['timeElapsed']['displayValue']
                 out = drive.get('displayResult', '')
-                seq = smax.get(t, -1) + 1
 
                 pts = (drive['plays'][-1]['homeScore'] + drive['plays'][-1]['awayScore']) - (drive['plays'][0]['homeScore'] + drive['plays'][0]['awayScore'])
                 if pts > 0:
@@ -283,8 +287,7 @@ class NFLSourceESPN(NFLSource):
                 else:
                     ascore = hscore = ''
 
-                df.loc[(t, seq), df.columns] = [per, st, pos, pl, yds, ela, out, pts, ascore, hscore]
-                smax[drive['team']['abbreviation']] = seq
+                df.loc[len(df), df.columns] = [t, per, st, pos, pl, yds, ela, out, pts, ascore, hscore]
 
             # in case needed, stash the names of the home and away teams as properties
             df.ateam = game['at']
