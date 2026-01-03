@@ -599,17 +599,17 @@ class NFLTiebreakerController(object):
 
         return rules
 
-    def tiebreaker(self, teams, winner=None):
+    def tiebreaker(self, teams, winner=None, rule=''):
         '''Get or set a tiebreaker outcome from cache
         '''
 
-        t = teams.copy()
+        t = list(teams)
         t.sort()
         k = ':'.join(t)
         if winner:
-            self.tb_cache[k] = winner
+            self.tb_cache[k] = (winner,rule)
         else:
-            return self.tb_cache.get(k)
+            return self.tb_cache.get(k, (None,None))
 
     def tiebreakers(self):
         '''Return a tiebreaker DataFrame for the object's teams, ideally from cache
