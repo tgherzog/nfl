@@ -1270,10 +1270,20 @@ class NFL():
     def tiebreakers(self, teams, strict=True, controller=None):
         '''Return tiebreaker analysis for specified teams
 
+           teams           a list-like of team codes
+
+           strict          If True, the function calculates head-to-head and common-game statistics,
+                           and returns only the rules that apply to the specified teams in order of
+                           precedence. The function will also perform sanity checks to ensure that
+                           necessary conditions are met, and if not sets the 'perc' fields to inf
+                           (refer to the necessary conditions for 3-team wildcard tiebreakers).
+                           If False, then none of this is done, all possible rules are returned, in
+                           an order that doesn't necessarily match the set of teams
+
+           controller      A variation of NFLTiebreakerController. Pass None to use the default class
+
         Each row in the returned dataframe is the results of a step in the NFL's tiebreaker procedure
         currently defined here: https://www.nfl.com/standings/tie-breaking-procedures
-
-        Rows are in order of precedence and depend on whether the teams are in the same division or not
 
         rank (conference or overall) statistics are always in increasing order, e.g. 1 is the worst
         ranked team
@@ -1358,43 +1368,8 @@ class NFL():
 
         return df
 
-    def tb_rules(self, teams):
-        '''Return the applicable tiebreaker rules in hierarchical order
 
-           teams is typically a list-like of teams, but can also be 'div' or 'conf'.
-           Lists determine which set of rules apply
-        '''
-
-        rules = ['overall','head-to-head']
-
-        if type(teams) is str:
-            div = teams == 'div'
-        else:
-            div = len(set( map(lambda x: self.teams_[x]['div'], teams) )) == 1
-
-        if div:
-            # teams are in same division
-            rules += ['division', 'common-games', 'conference']
-        else:
-            # different divisions
-            rules += ['conference', 'common-games']
-
-        rules += ['victory-strength', 'schedule-strength', 'conference-rank', 'overall-rank']
-
-        if rules[2] == 'division':
-            rules.append('common-netpoints')
-        else:
-            rules.append('conference-netpoints')
-
-        rules.append('overall-netpoints')
-
-        if self.netTouchdowns:
-            rules.append('net-touchdowns')
-
-        return rules
-
-
-    def tiebreaks_old(self, teams, limit=None, divRule=True, controller=None):
+    def tiebreaks(self, teams, limit=None, divRule=True, controller=None):
         '''Returns a series with the results of a robust tiebreaker analysis for teams
            Team codes comprise the series index in hierarchical order, while the series
            value indicates the rule (or basis) for each team besting the one below it
@@ -1405,66 +1380,14 @@ class NFL():
 
            divRule   Enforce the "one-club-per-division" rule as stated in the wildcard
                      tiebreaking procedures
-        '''
 
-        if controller is None:
-            controller = NFLTiebreakerController(nfl, teams)
-
-        teams = self._list(teams)
-        if len(teams) <= 1:
-            # in this case the subroutine will short circuit and return quickly
-            # so don't incur the overhead of generating data
-            tb = None
-        else:
-            tb = self.tiebreakers(teams, strict=False).xs('pct', axis=1, level=1).T
-
-        return self.run_tiebreaks(tb, gm, opps, limit, divRule)
-
-    def prepare_tiebreak_data(self, teams):
-        '''Return a tuple of tiebreak data for the given teams. These typically get passed to
-           tiebreaks
-        '''
-
-        tb = self.tiebreakers(teams, strict=False).xs('pct', axis=1, level=1).T
-        gm = self.wlt(teams, within=teams, result='extended')[1]
-        opps = self.schedule(teams, by='team')['opp'].unstack()
-
-        return (tb,gm,opps)
-
-    def tiebreaks(self, teams, limit=None, divRule=True, controller=None):
-        '''Subroutine of tiebreaks. You can call this variant with input data
-           to perform multiple tiebreaks efficiently
-
-           limit      same as tiebreaks
-           divRule    same as tiebreaks
-
-           tb         tiebreaker data, typically something like:
-
-                      nfl.tiebreakers(teams, strict=False).xs('pct', axis=1, level=1).T
-
-                      or derived like this:
-
-                      tb.loc[list(subTeams)]
-
-           gm         an NFLGameMatrix, typically something like:
-
-                      nfl.wlt(teams, within=teams, result='extended')[0]
-
-                      or derived like this:
-
-                      gm.submatrix(subTeams)
-
-            opps      matrix of opponents for teams, typically:
-
-                      nfl.schedule(teams, by='team')['opp'].unstack()
-
-
+           controller A variation of NFLTiebreakerController. Pass None to use the default class
         '''
 
         if controller is None:
             controller = NFLTiebreakerController(self, teams)
 
-        teams = self._list(teams)
+        teams = set(self._list(teams))  # important to ensure we work from a copy
         limit = limit or len(teams)
         r = pd.Series(name='level')
         logger = logging.getLogger('nfl')
@@ -1518,6 +1441,11 @@ class NFL():
             # can't yet accurately sort for things like head-to-head and common-games
             # Sorting has to happen incrementally
 
+            (team,rule) = controller.tiebreaker(tb.index)
+            if team:
+                if isLog: msg(depth, 'cache', rule=rule, target=team, pool=tb.index)
+                return (team, rule)
+
             teams = set(tb.index)
             divs  = set( map(lambda x: self.teams_[x]['div'], teams) )
 
@@ -1543,6 +1471,7 @@ class NFL():
                             g = gm.submatrix(t.index)
                             if isLog: msg(depth, 'divRule', pool=d)
                             (winner,rule) = test(controller.rules('div'), t, g, False, depth+1)
+                            controller.tiebreaker(d, winner, rule)
                             teams -= d - {winner}
 
                     if len(teams) < len(tb.index):
@@ -1609,6 +1538,7 @@ class NFL():
                 k = len( r[r==r.iloc[0]] )
                 if k == 1:
                     if isLog: msg(depth, 'select', target=r.index[0], pool=r.index, rule=rule)
+                    controller.tiebreaker(r.index, r.index[0], rule)
                     return (r.index[0], rule)
                 elif k > 0 and k < len(tb):
                     # restart with just the tied clubs

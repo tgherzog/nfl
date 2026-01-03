@@ -571,7 +571,7 @@ class NFLTiebreakerController(object):
         self.gm = None
         self.teams = nfl._list(teams)
 
-        for i in ('div','rules'):
+        for i in ('div','conf'):
             self.tb_rules[i] = self.get_rules(i)
 
     def get_rules(self, n):
