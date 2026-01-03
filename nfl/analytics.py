@@ -555,7 +555,112 @@ class NFLGameMatrix(pd.DataFrame):
         ''' Return a submatrix of the current matrix for the specified teams
         '''
 
+        if type(teams) is set:
+            teams = list(teams)        
+
         return self.loc[teams, teams]
+
+class NFLTiebreakerController(object):
+
+    def __init__(self, nfl, teams):
+        self.nfl = nfl
+        self.cg = None
+        self.tb_rules = {}
+        self.tb_cache = {}
+        self.tb = None
+        self.gm = None
+        self.teams = nfl._list(teams)
+
+        for i in ('div','rules'):
+            self.tb_rules[i] = self.get_rules(i)
+
+    def get_rules(self, n):
+        '''Return the rule list for category n (div|conv)
+        '''
+
+        rules = ['overall','head-to-head']
+
+        if n == 'div':
+            rules += ['division', 'common-games', 'conference']
+        else:
+            rules += ['conference', 'common-games']
+
+        rules += ['victory-strength', 'schedule-strength', 'conference-rank', 'overall-rank']
+
+        if rules[2] == 'division':
+            rules.append('common-netpoints')
+        else:
+            rules.append('conference-netpoints')
+
+        rules.append('overall-netpoints')
+
+        if self.nfl.netTouchdowns:
+            rules.append('net-touchdowns')
+
+        return rules
+
+    def tiebreaker(self, teams, winner=None):
+        '''Get or set a tiebreaker outcome from cache
+        '''
+
+        t = teams.copy()
+        t.sort()
+        k = ':'.join(t)
+        if winner:
+            self.tb_cache[k] = winner
+        else:
+            return self.tb_cache.get(k)
+
+    def tiebreakers(self):
+        '''Return a tiebreaker DataFrame for the object's teams, ideally from cache
+        '''
+
+        if self.tb is None:
+            self.tb = self.nfl.tiebreakers(self.teams, strict=False, controller=self).xs('pct', axis=1, level=1).T
+
+        return self.tb
+
+    def gamematrix(self):
+        '''Return an NFLGameMatridx for the specified teams, ideally from cache
+        '''
+
+        if self.gm is None:
+            return self.nfl.wlt(self.teams, within=self.teams, result='extended')[1]
+
+        return self.gm
+
+
+    def rules(self, teams):
+        '''Return tiebreaker rules for the given teams, in hierarchical order
+           teams may also be a keyword, 'div' or 'conf'
+        '''
+        if type(teams) is str:
+            k = 'div' if teams == 'div' else 'conf'
+        else:
+            k = 'div' if len(set( map(lambda x: self.nfl.teams_[x]['div'], teams) )) == 1 else 'conf'
+
+        return self.tb_rules[k]
+
+    def common_games(self, teams):
+        ''' Return the wlt DataFrame for the given teams against their common
+            opponents
+        '''
+
+        t = teams.copy()
+        t.sort()
+        k = ':'.join(t)
+
+        if self.cg is not None and k in self.cg.get_level_values(0):
+            return self.cg.xs(k)
+        
+        s = self.nfl.wlt(teams, within=self.nfl.opponents(teams), result='long')
+        s = s.assign(key=k).set_index('key', append=True).swaplevel()
+        if self.cg is None:
+            self.cg = s
+        else:
+            self.cg = pd.concat([self.cg, s])
+
+        return self.cg.xs(k)
 
 
 class NFLSequenceMaker():
