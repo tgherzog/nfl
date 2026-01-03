@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from .utils import current_season, vmap, ivmap
-from .analytics import NFLTeamMatrix, NFLGameMatrix, NFLScenario, NFLScenarioMaker
+from .analytics import NFLTeamMatrix, NFLGameMatrix, NFLScenario, NFLScenarioMaker, NFLTiebreakerError
 
 class NFLTeam():
     '''an NFL team, typically obtained by calling the NFL object with the team code
@@ -419,6 +419,7 @@ class NFL():
         # sort by division tiebreakers
         self.stats = stats           # so that tiebreaks doesn't go recursive
 
+        # TODO: this is a lot of calls to tiebreaks
         s = pd.Series(index=stats.index)
         for div in stats['div'].unique():
             z = self.tiebreaks(div)
@@ -1164,7 +1165,7 @@ class NFL():
 
         method = methods.get(type, {type: 1})
 
-        # FIXME: implement a complete game generator in lieu of this kludge
+        # TODO: implement a complete game generator in lieu of this kludge
         if wrapper:
             pb = wrapper(total=len(self.gameFrame(teams, season=season)), **wrapper_args)
         else:
@@ -1265,7 +1266,7 @@ class NFL():
         return self._stats().loc[team][['overall','division','conference']].unstack()
 
 
-    def tiebreakers(self, teams):
+    def tiebreakers(self, teams, strict=True):
         '''Return tiebreaker analysis for specified teams
 
         Each row in the returned dataframe is the results of a step in the NFL's tiebreaker procedure
@@ -1284,104 +1285,109 @@ class NFL():
 
         Example:
 
-        z = nfl.tiebreakers(nfl('NFC-North').teams)
+        z = nfl.tiebreakers('NFC-North')
 
         # sort division according to tiebreaker rules, highest ranked team in column 1
         z = z.xs('pct', level=1, axis=1).sort_values(list(z.index), axis=1, ascending=False)
         '''
 
         teams = self._list(teams)
-        df = pd.DataFrame(columns=pd.MultiIndex.from_product([teams, ['win','loss','tie', 'pct']], names=['team','outcome']))
-        common_opponents = self.opponents(teams)
-        divisions = set()
+        # we'll prioritize rules later: for now, these can be in any order
+        rules = ['overall', 'head-to-head', 'division', 'conference', 'common-games',
+            'victory-strength', 'schedule-strength', 'conference-rank', 'overall-rank',
+            'common-netpoints', 'conference-netpoints', 'overall-netpoints', 'net-touchdowns']
+        columns = pd.MultiIndex.from_product([teams, ['win','loss','tie', 'pct']], names=['team','outcome'])
+        df = pd.DataFrame(np.nan, index=rules, columns=columns)
+
         stats = self._stats()
         if self.netTouchdowns:
             ntd = self.net_stats(teams)
         else:
             ntd = {}
 
-        # determine which divisions are in the specified list. If more than one then adjust the tiebreaker order
-        for t in teams:
-            divisions.add(self.teams_[t]['div'])
-
-        # set rules to default values here so they appear in the correct order
-        df.loc['overall'] = np.nan
-        df.loc['head-to-head'] = np.nan
-        if len(divisions) > 1:
-            df.loc['conference'] = np.nan
-            df.loc['common-games'] = np.nan
-        else:
-            df.loc['division'] = np.nan
-            df.loc['common-games'] = np.nan
-            df.loc['conference'] = np.nan
-        
-        df.loc['victory-strength'] = np.nan
-        df.loc['schedule-strength'] = np.nan
-        df.loc['conference-rank'] = np.nan
-        df.loc['overall-rank'] = np.nan
-
-        if len(divisions) > 1:
-            df.loc['conference-netpoints'] = np.nan
-        else:
-           df.loc['common-netpoints'] = np.nan
-
-        df.loc['overall-netpoints'] = np.nan
-
-        if self.netTouchdowns:
-            df.loc['net-touchdowns'] = np.nan
-
-        (h2h,gm) = self.wlt(teams, within=teams, season='reg', result='extended')
-        co  = self.wlt(teams, within=common_opponents, season='reg', result='long')
+        if strict:
+            (h2h,gm) = self.wlt(teams, within=teams, season='reg', result='extended')
+            co  = self.wlt(teams, within=self.opponents(teams), season='reg', result='long')
 
         for team in teams:
             df.loc['overall', team] = stats.loc[team,'overall'].values
-            df.loc['head-to-head', team] = h2h.loc[team].drop(['scored', 'allowed']).values
-            df.loc['common-games', team] = co.loc[team].drop(['scored','allowed']).values
+            if strict:
+                df.loc['head-to-head', team] = h2h.loc[team].drop(['scored', 'allowed']).values
+                df.loc['common-games', team] = co.loc[team].drop(['scored','allowed']).values
+                df.loc['common-netpoints', (team,'pct')] = co.loc[team, 'scored'] - co.loc[team, 'allowed']
+
             df.loc['conference', team] = stats.loc[team,'conference'].values
             df.loc['victory-strength', team] = stats.loc[team,'vic_stren'].values
             df.loc['schedule-strength', team] = stats.loc[team,'sch_stren'].values
-            if 'division' in df.index:
-                df.loc['division', team] = stats.loc[team,'division'].values
+            df.loc['division', team] = stats.loc[team,'division'].values
 
             df.loc['conference-rank', (team,'pct')] = stats.loc[team, ('misc', 'rank-conf')]
             df.loc['overall-rank', (team,'pct')] = stats.loc[team, ('misc', 'rank-overall')]
-            if 'common-netpoints' in df.index:
-              df.loc['common-netpoints', (team,'pct')] = co.loc[team, 'scored'] - co.loc[team, 'allowed']
 
-            if 'conference-netpoints' in df.index:
-                df.loc['conference-netpoints', (team,'pct')] = stats.loc[team, ('misc', 'conf-pts-scored')] - stats.loc[team, ('misc', 'conf-pts-allowed')]
-
+            df.loc['conference-netpoints', (team,'pct')] = stats.loc[team, ('misc', 'conf-pts-scored')] - stats.loc[team, ('misc', 'conf-pts-allowed')]
             df.loc['overall-netpoints', (team,'pct')] = stats.loc[team, ('misc', 'pts-scored')] - stats.loc[team, ('misc', 'pts-allowed')]
 
             if self.netTouchdowns:
                 df.loc['net-touchdowns', (team,'pct')] = ntd.get(team, np.nan)
 
             # sanity checks: we use inf to indicate that the column should be ignored
-            if not gm.same():
+            if strict and not gm.same():
                 # all teams must have played each other the same number of games or h2h is invalid
                 df.loc['head-to-head', (team,'pct')] = np.inf
 
 
         # team-wide sanity checks
-        if (df.loc['common-games'].drop('pct', level=1).groupby('team').sum() < 4).any():
-            # if any team plays less than 4 common games, all common-team record scores are invalid
-            df.loc['common-games'].loc[:, 'pct'] = np.inf
+        if strict:
+            divs = set( map(lambda x: self.teams_[x]['div'], teams) )
 
-        # A note about how 'clean-sweep' analysis works
-        # The sanity check below ensures that at least one team is a "clean-sweep" either perfectly winning
-        # or losing against the others. If there is no "clean-sweep" (pct=[0,1]) then the rule is skipped
-        #   If there is a clean-sweep loser (pct=0) that team will be dropped from contention by sorting, and the
-        #   procedure restarted with the remaining teams
-        #   If there is a clean-sweep winner, then the lower-ranked teams will still be dropped one-by-one
-        #   as the procedure restarts i.e. a clean-sweep winner in a set of opponents is by definition
-        #   a clean-sweep winner of a subset of opponents
+            if len(divs) > 1 and (df.loc['common-games'].drop('pct', level=1).groupby('team').sum() < 4).any():
+                # if any team plays less than 4 common games, all common-team record scores are invalid
+                df.loc['common-games'].loc[:, 'pct'] = np.inf
 
-        z = df.loc['head-to-head'].loc[:,'pct']
-        if len(divisions) > 1 and len(z) > 2 and not z.isin([0, 1]).any():
-            # wildcard tiebreakers with 3+ teams must be a clean sweep. If there isn't one then set to nan
-            df.loc['head-to-head'].loc[:, 'pct'] = np.inf
+            
+            if len(divs) > 1 and len(teams) > 2 and gm.sweep()[0] is None:
+                # in conference tiebreakers with 3+ teams, head-to-head matchups across divisions
+                # must have a "sweep" winner or loser
+                df.loc['head-to-head'].loc[:, 'pct'] = np.inf
+
+            return df.loc[self.tb_rules(teams)]
 
         return df
+
+    def tb_rules(self, teams):
+        '''Return the applicable tiebreaker rules in hierarchical order
+
+           teams is typically a list-like of teams, but can also be 'div' or 'conf'.
+           Lists determine which set of rules apply
+        '''
+
+        rules = ['overall','head-to-head']
+
+        if type(teams) is str:
+            div = teams == 'div'
+        else:
+            div = len(set( map(lambda x: self.teams_[x]['div'], teams) )) == 1
+
+        if div:
+            # teams are in same division
+            rules += ['division', 'common-games', 'conference']
+        else:
+            # different divisions
+            rules += ['conference', 'common-games']
+
+        rules += ['victory-strength', 'schedule-strength', 'conference-rank', 'overall-rank']
+
+        if rules[2] == 'division':
+            rules.append('common-netpoints')
+        else:
+            rules.append('conference-netpoints')
+
+        rules.append('overall-netpoints')
+
+        if self.netTouchdowns:
+            rules.append('net-touchdowns')
+
+        return rules
 
 
     def tiebreaks(self, teams, limit=None, divRule=True):
@@ -1396,9 +1402,12 @@ class NFL():
            divRule   Enforce the "one-club-per-division" rule as stated in the wildcard
                      tiebreaking procedures
         '''
-        teams = list(self._list(teams))
+
+        teams = set(self._list(teams))
         limit = limit or len(teams)
         r = pd.Series(name='level')
+        logger = logging.getLogger('nfl')
+        isLog = logger.isEnabledFor(logging.INFO)
 
         # shortcuts for efficiency: implement before call to _stats for speed
         if len(teams) == 0:
@@ -1406,133 +1415,191 @@ class NFL():
         elif len(teams) == 1:
             r[teams[0]] = 'overall'
             return r
-        elif limit == 1:
-            # if only care about the winner, try to first discern based on overall pct
-            if self.stats is None:
-                z = self.wlt(teams, season='reg')['pct']
+
+        tb = self.tiebreakers(teams, strict=False).xs('pct', axis=1, level=1).T
+        rules = self.tb_rules(teams)
+        (wlt,gm) = self.wlt(teams, within=teams, result='extended')
+        opps = self.schedule(teams, by='team')['opp'].unstack() # used to quickly get common opponents
+
+        def msg(depth, text, target=None, pool=None, rule=None):
+
+            if target is not None and type(target) is not str:
+                target = ','.join(target)
+
+            if target and pool is not None:
+                text = '{} {} from {}'.format(text, target, ','.join(pool))
+            elif target:
+                text = '{} {}'.format(text, target)
+            elif pool is not None:
+                text = '{} {}'.format(text, ','.join(pool))
+
+            if rule is not None:
+                text = '{} [{}]'.format(text, rule)
+
+            if depth:
+                prefix = ('>' * depth) + (' ' * depth)
             else:
-                z = self.stats.loc[teams,('overall','pct')]
-                
-            z = z.copy().sort_values(ascending=False)
-            if z.diff(-1).iloc[0] > 0:
-                r[z.index[0]] = 'overall'
-                return r
+                prefix = ''
 
-        stats = self._stats()
+            text = prefix + 'tiebreaks: {}'.format(text)
+            logger.info(text)
 
-        def check_until_same(s):
-            '''Returns the number of initial elements with the same value as the next one.
-               0 means the first element is unique
-               len(s)-1 means they are all the same
+        def test(rules, tb, gm, divRule, depth):
+            '''Evaluates teams according to the given set of rules
+
+               tb is a derivative of a DataSet from tiebreakers, just the 'pct' columns,
+               transformed (teams in rows)
+
+               rules must be a list derived from tb_rules(), and must be a subset of the
+               columns in tb, in order of application
+
+               gm is an NFLGameMatrix (from NFL.wlt) used to compute h2h on the fly. It
+               should describe the same teams as in tb
             '''
 
-            if s.isna().all() or (s == np.inf).any():
-                return len(s) - 1
-                
-            i = 0
-            for (k,v) in s.diff(-1).items():
-                if v != 0:
-                    return i
+            # NB that columns are assumed to arrive here unsorted, but we
+            # can't yet accurately sort for things like head-to-head and common-games
+            # Sorting has to happen incrementally
 
-                i += 1
+            # but first see if we can simply use overall record
+            t = tb['overall'].sort_values(ascending=False)
+            if (t == t.iloc[0]).sum() == 1:
+                if isLog: msg(depth, 'select', target=t.index[0], pool=t.index, rule='overall')
+                return (t.index[0], 'overall')
 
-            return len(s)-1
+            # NB: 'overall' is still relevant in the code below, because it's used
+            # to drop teams that aren't tied overall
 
-        def msg(op, codes):
-            return 'tiebreaks: {} - {}'.format(op, ','.join(codes))
+            teams = set(tb.index)
+            divs  = set( map(lambda x: self.teams_[x]['div'], teams) )
 
-        def test(t):
-            '''Runs tests to determine the exclusive highest-ranking team.
-               If successful, a tuple (team_code,rule) is returned
-               If a condition is encountered requiring a restart on a subset
-               of teams, a tuple (surviving_teams, rule) is returned
+            # apply division tiebreaker
+            if divRule and len(divs) > 1:
+                # count teams in each division: we only apply division
+                # tiebreaker to divisions with more than one team
+                dt = {}
+                dmax = 0
+                for i in teams:
+                    d = self.teams_[i]['div']
+                    if d not in dt:
+                        dt[d] = set()
 
-               t    the set of teams to test. Per wildcard rules, only 1 team from each division
-                    should be included (it does not test for this)
-            '''
+                    dt[d].add(i)
+                    dmax = max(dmax, len(dt[d]))
 
-            # count divs
-            divs = set()
-            for elem in t:
-                divs.add(self.teams_[elem]['div'])
+                if dmax > 1:
+                    # prune eligible teams to 1 in each division
+                    for d in dt.values():
+                        if len(d) > 1:
+                            t = tb.loc[list(d)].copy()
+                            g = gm.loc[t.index, t.index]
+                            if isLog: msg(depth, 'divRule', pool=d)
+                            (winner,rule) = test(self.tb_rules('div'), t, g, False, depth+1)
+                            teams -= d - {winner}
 
-            z = self.tiebreakers(t).xs('pct', level=1, axis=1).T
+                    if len(teams) < len(tb.index):
+                        # shorten the teams
+                        tb = tb.loc[list(teams)]
+                        gm = gm.loc[tb.index, tb.index]
 
-            # sort by values for each rule, and drop the 1st rule (overall) since that was already
-            # tested by the calling function
-            z = z.sort_values(list(z.columns), ascending=False).drop(z.columns[0], axis=1)
-            for rule in z.columns:
-                if rule == 'head-to-head' and len(divs) > 1 and len(z) > 2:
+
+            # recompute head-to-head
+            if 'head-to-head' in rules:
+                for i in teams:
+                    tb.loc[i, 'head-to-head'] = gm.pct(i)
+
+            # now sort on rules, up to common-games if present
+            s = rules
+            if 'common-games' in s:
+                s = s[:s.index('common-games')]
+
+            tb = tb.sort_values(s, ascending=False)
+
+            # cycle through the rules
+            for rule in rules:
+                # some rules require special treatment, implemented as a series
+                # of if/elif statements. If a rule can be evaluated ordinarily
+                # it can fall through to the code below. Otherwise, include a
+                # continue statement to ignore the rule and move to the next one
+
+                if rule == 'head-to-head' and len(divs) > 1 and len(teams) > 2:
                     # special case for ties amongst 3+ teams across divisions
-                    # a "clean sweep" either picks the top team or eliminates the bottom one
-                    # Note the tiebreakers function ensures that if there isn't a clean winning or losing sweep
-                    # then the rule is invalidated
-                    if z.iloc[0][rule] == 1:
-                        return (z.index[0], rule)
-                    elif z.iloc[-1][rule] == 0:
-                        return (t - {z.index[-1]}, rule)
-                else:
-                    x = check_until_same(z[rule])
-                    if x == 0:
-                        return (z.index[0], rule)
-                    elif x < len(z)-1:
-                        # multiple top teams at this rule, so eliminate the remainder for this round
-                        # and start over
-                        return (t - set(z.index[x+1:]), rule)
+                    (sweeper,s) = gm.sweep()
+                    if s == 1:
+                        if isLog: msg(depth, 'sweep in', rule=rule, target=sweeper, pool=gm.index)
+                        return (sweeper, rule)
 
-            # Early in the season it's possible that some teams haven't played; in that case
-            # just return the first team
-            if self.stats.loc[list(t),'overall'].sum().sum() == 0:
-                return (list(t)[0], '')
+                    elif s == 0:
+                        # Drop the losing team and restart with the remainders
+                        t = tb.loc[list(teams - {sweeper})].copy()
+                        g = gm.loc[t.index, t.index]
+                        if isLog: msg(depth, 'sweep out', rule=rule, target=sweeper, pool=gm.index)
+                        return test(self.tb_rules(t.index), t, g, divRule, depth+1)
 
-            suggest = '' if self.netTouchdowns else ' (try setting nfl.netTouchdowns=True)'
-            raise RuntimeError("Can't resolve tiebreaker: teams are essentially equal.{} ({})".format(suggest, ','.join(t)))
+                    else:
+                        continue
+
+                elif rule == 'common-games':
+                    # this has to be updated on the fly
+                    # TODO: consider caching this operation
+                    common_opps = None
+                    for i in teams:
+                        if common_opps is None:
+                            common_opps = set(opps[i].dropna())
+                        else:
+                            common_opps &= set(opps[i].dropna())
+
+                    # this flag is set to False if any team fails to meet the
+                    # minimum number of required games
+                    legal = True
+
+                    wlt = self.wlt(tb.index, within=common_opps, result='long')
+                    for (i,row) in wlt.iterrows():
+                        tb.loc[i, ['common-games', 'common-netpoints']] = [row['pct'], row['scored']-row['allowed']]
+                        if len(divs) > 1 and row[['win','loss','tie']].sum() < 4:
+                            legal = False
+
+                    # now that these are accurate, we need to update the sort
+                    tb.sort_values(rules, ascending=False)
+
+                    if not legal:
+                        continue
+
+                # count the teams that tie for this rule - teams should be sorted by now
+                r = tb[rule]
+                k = len( r[r==r.iloc[0]] )
+                if k == 1:
+                    if isLog: msg(depth, 'select', target=r.index[0], pool=r.index, rule=rule)
+                    return (r.index[0], rule)
+                elif k > 0 and k < len(tb):
+                    # restart with just the tied clubs
+                    t = tb.loc[list(tb.index[:k])].copy()
+                    g = gm.loc[t.index, t.index]
+
+                    if isLog: msg(depth, 'tiebreaker', target=t.index, pool=tb.index)
+                    return test(self.tb_rules(t.index), t, g, divRule, depth+1)
+
+                # otherwise, everyone ties, so proceed to the next rule
+
+            # if we get this far, we've run out of rules, and remaining teams are a tie
+            # TODO: implement indicators of more specific reasons for a tie
+            raise NFLTiebreakerError("Can't resolve tiebreakers for {}".format(','.join(teams)))
+
 
         while len(teams) > 1:
             if len(r) >= limit:
                 return r
 
-            logging.debug(msg('1.1 (Begin)', teams))
-            subTeams = set(teams)
+            (team,rule) = test(rules, tb, gm, divRule, 0)
+            r[team] = rule
+            teams -= {team}
+            tb = tb.loc[list(teams)]
+            gm = gm.loc[tb.index, tb.index]
 
-            # apply division tiebreakers if necessary. start by counting # of divisions
-            z = stats.loc[teams] # NB: this will change row order
-            divs = z['div'].value_counts()
-
-            # check if a) divRule in effect, b) are 2+ divisions, c) are 1+ divisions with 2+ clubs
-            if divRule and len(divs) > 1 and len(divs[divs>1]) > 0:
-                for d in divs[divs>1].index:
-                    # remove teams in this division except for the first
-                    subTeams -= set(stats[stats.index.isin(z[z['div']==d].index)].index[1:])
-
-                logging.debug(msg('2.2 (1 club/division rule)', subTeams))
-
-            # we first test the overall rule since that can be done inexpensively and hopefully
-            # will eliminate a significant number of candidates. Otherwise,
-            # we call the test function which calculates all the tiebreaker rules (at a significant
-            # expense), which we call with the surviving subset of teams
-            z = stats.loc[list(subTeams),('overall','pct')].sort_values(ascending=False).copy()
-            t = check_until_same(z)
-            if t == 0:
-                r[z.index[0]] = 'overall'
-                teams.remove(z.index[0])
-                logging.debug(msg('3.1 (Select)', [z.index[0],'overall']))
-            else:
-                subTeams = set(z.index[:t+1])
-                while True:
-                    logging.debug(msg('1.2 (Test)', subTeams))
-                    (result,rule) = test(subTeams)
-                    if type(result) is set:
-                        logging.debug(msg('1.3 (Restart)', list(result) + [rule]))
-                        subTeams = result
-                    else:
-                        r[result] = rule
-                        teams.remove(result)
-                        logging.debug(msg('3.2 (Select)', [result,rule]))
-                        break
-    
         # should always be one team left (runt of the litter)
-        r[teams[0]] = ''
+        team = teams.pop()
+        if isLog: msg(0, 'select', target=team, rule='')
+        r[team] = ''
         return r
 
     def wildcard(self, teams, seeds=3):

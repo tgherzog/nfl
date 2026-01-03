@@ -5,6 +5,9 @@ from .utils import vmap, ivmap, is_listlike
 from .sequence import reorder, expand, expand_len, expand_width
 import math
 
+class NFLTiebreakerError(Exception):
+    pass
+
 class NFLScenario(pd.Series):
     '''A series of game outcomes created by NFLScenarioMaker. Values will
        be one of 'win', 'loss' or 'tie', indexed by values in the *master*
@@ -508,16 +511,45 @@ class NFLGameMatrix(pd.DataFrame):
             m = self.games()
             return m.isin([np.nan, m.iloc[0,1]]).all(axis=None)
 
-    def pct(self, team, opp):
+    def pct(self, team, opp=None):
         '''Return the wlt percentage of a team against a specified opponent
+
+           opp: the opposing team. If none, then return the pct for the
+           win percentage against all other teams (or None)
         '''
 
-        if team != opp and team in self.columns and opp in self.columns:
+        if opp is None:
+            w = self.loc[team].sum()
+            g = w + self[team].sum()
+            if g > 0:
+                return w / g
+
+        elif team != opp and team in self.columns and opp in self.columns:
             w = self.loc[team, opp]
             g = w + self.loc[opp, team]
             if g > 0:
                 return w / g
 
+    def sweep(self):
+        '''Returns a tuple of a "head-to-head sweep" analysis, which is the
+           team that has either beaten all others or lost to all others. The
+           return is a tuple (team,0|1) or (None,None)
+        '''
+
+        # NB: it's not logically possible that there can be multiple
+        # winning sweep teams or losing sweep teams, assuming that every
+        # team plays the others at least once
+
+        for t in self.columns:
+            wins   = self.loc[t].dropna()
+            losses = self[t].dropna()
+            if (wins > 0).all() and losses.sum() == 0:
+                # all wins, no losses or ties
+                return (t, 1)
+            elif (wins == 0).all() and (losses > 0).all():
+                return (t, 0)
+
+        return (None,None)
 
 
 class NFLSequenceMaker():
