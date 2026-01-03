@@ -551,6 +551,12 @@ class NFLGameMatrix(pd.DataFrame):
 
         return (None,None)
 
+    def submatrix(self, teams):
+        ''' Return a submatrix of the current matrix for the specified teams
+        '''
+
+        return self.loc[teams, teams]
+
 
 class NFLSequenceMaker():
 

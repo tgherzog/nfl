@@ -419,10 +419,12 @@ class NFL():
         # sort by division tiebreakers
         self.stats = stats           # so that tiebreaks doesn't go recursive
 
-        # TODO: this is a lot of calls to tiebreaks
         s = pd.Series(index=stats.index)
+        (tm,gm,opps) = self.prepare_tiebreak_data(stats.index)
         for div in stats['div'].unique():
-            z = self.tiebreaks(div)
+            t = tm.loc[list(self.divs_[div])]
+            g = gm.submatrix(t.index)
+            z = self.run_tiebreaks(t, g, opps)
             z[:] = range(len(z))
             s.loc[z.index] = z.astype(s.dtype)
 
@@ -1403,7 +1405,58 @@ class NFL():
                      tiebreaking procedures
         '''
 
-        teams = set(self._list(teams))
+        teams = self._list(teams)
+        if len(teams) <= 1:
+            # in this case the subroutine will short circuit and return quickly
+            # so don't incur the overhead of generating data
+            tb = gm = opps = None
+        else:
+            (tb,gm,opps) = self.prepare_tiebreak_data(teams)
+
+        return self.run_tiebreaks(tb, gm, opps, limit, divRule)
+
+    def prepare_tiebreak_data(self, teams):
+        '''Return a tuple of tiebreak data for the given teams. These typically get passed to
+           tiebreaks
+        '''
+
+        tb = self.tiebreakers(teams, strict=False).xs('pct', axis=1, level=1).T
+        gm = self.wlt(teams, within=teams, result='extended')[1]
+        opps = self.schedule(teams, by='team')['opp'].unstack()
+
+        return (tb,gm,opps)
+
+    def run_tiebreaks(self, tb, gm, opps, limit=None, divRule=True):
+        '''Subroutine of tiebreaks. You can call this variant with input data
+           to perform multiple tiebreaks efficiently
+
+           limit      same as tiebreaks
+           divRule    same as tiebreaks
+
+           tb         tiebreaker data, typically something like:
+
+                      nfl.tiebreakers(teams, strict=False).xs('pct', axis=1, level=1).T
+
+                      or derived like this:
+
+                      tb.loc[list(subTeams)]
+
+           gm         an NFLGameMatrix, typically something like:
+
+                      nfl.wlt(teams, within=teams, result='extended')[0]
+
+                      or derived like this:
+
+                      gm.submatrix(subTeams)
+
+            opps      matrix of opponents for teams, typically:
+
+                      nfl.schedule(teams, by='team')['opp'].unstack()
+
+
+        '''
+
+        teams = set(tb.index)
         limit = limit or len(teams)
         r = pd.Series(name='level')
         logger = logging.getLogger('nfl')
@@ -1413,13 +1466,9 @@ class NFL():
         if len(teams) == 0:
             return r
         elif len(teams) == 1:
-            r[teams[0]] = 'overall'
+            team = teams.pop()
+            r[team] = 'overall'
             return r
-
-        tb = self.tiebreakers(teams, strict=False).xs('pct', axis=1, level=1).T
-        rules = self.tb_rules(teams)
-        (wlt,gm) = self.wlt(teams, within=teams, result='extended')
-        opps = self.schedule(teams, by='team')['opp'].unstack() # used to quickly get common opponents
 
         def msg(depth, text, target=None, pool=None, rule=None):
 
@@ -1492,7 +1541,7 @@ class NFL():
                     for d in dt.values():
                         if len(d) > 1:
                             t = tb.loc[list(d)].copy()
-                            g = gm.loc[t.index, t.index]
+                            g = gm.submatrix(t.index)
                             if isLog: msg(depth, 'divRule', pool=d)
                             (winner,rule) = test(self.tb_rules('div'), t, g, False, depth+1)
                             teams -= d - {winner}
@@ -1500,7 +1549,7 @@ class NFL():
                     if len(teams) < len(tb.index):
                         # shorten the teams
                         tb = tb.loc[list(teams)]
-                        gm = gm.loc[tb.index, tb.index]
+                        gm = gm.submatrix(tb.index)
 
 
             # recompute head-to-head
@@ -1532,7 +1581,7 @@ class NFL():
                     elif s == 0:
                         # Drop the losing team and restart with the remainders
                         t = tb.loc[list(teams - {sweeper})].copy()
-                        g = gm.loc[t.index, t.index]
+                        g = gm.submatrix(t.index)
                         if isLog: msg(depth, 'sweep out', rule=rule, target=sweeper, pool=gm.index)
                         return test(self.tb_rules(t.index), t, g, divRule, depth+1)
 
@@ -1574,7 +1623,7 @@ class NFL():
                 elif k > 0 and k < len(tb):
                     # restart with just the tied clubs
                     t = tb.loc[list(tb.index[:k])].copy()
-                    g = gm.loc[t.index, t.index]
+                    g = gm.submatrix(t.index)
 
                     if isLog: msg(depth, 'tiebreaker', target=t.index, pool=tb.index)
                     return test(self.tb_rules(t.index), t, g, divRule, depth+1)
@@ -1590,11 +1639,11 @@ class NFL():
             if len(r) >= limit:
                 return r
 
-            (team,rule) = test(rules, tb, gm, divRule, 0)
+            (team,rule) = test(self.tb_rules(teams), tb, gm, divRule, 0)
             r[team] = rule
             teams -= {team}
             tb = tb.loc[list(teams)]
-            gm = gm.loc[tb.index, tb.index]
+            gm = gm.submatrix(tb.index)
 
         # should always be one team left (runt of the litter)
         team = teams.pop()
