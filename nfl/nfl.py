@@ -1510,15 +1510,6 @@ class NFL():
             # can't yet accurately sort for things like head-to-head and common-games
             # Sorting has to happen incrementally
 
-            # but first see if we can simply use overall record
-            t = tb['overall'].sort_values(ascending=False)
-            if (t == t.iloc[0]).sum() == 1:
-                if isLog: msg(depth, 'select', target=t.index[0], pool=t.index, rule='overall')
-                return (t.index[0], 'overall')
-
-            # NB: 'overall' is still relevant in the code below, because it's used
-            # to drop teams that aren't tied overall
-
             teams = set(tb.index)
             divs  = set( map(lambda x: self.teams_[x]['div'], teams) )
 
@@ -1635,13 +1626,26 @@ class NFL():
             raise NFLTiebreakerError("Can't resolve tiebreakers for {}".format(','.join(teams)))
 
 
+        # Assess overall record at the top level to avoid heavy computes if possible
+        overall = tb['overall']
+
         while len(teams) > 1:
             if len(r) >= limit:
                 return r
 
-            (team,rule) = test(self.tb_rules(teams), tb, gm, divRule, 0)
+            overall = overall.sort_values(ascending=False)
+            if (overall == overall.iloc[0]).sum() == 1:
+                team = overall.index[0]
+                rule = 'overall'
+                if isLog: msg(0, 'select', target=team, rule='overall')
+            else:
+                # TODO: if necessary, initialize gm here
+                # NB: we have to pass in all teams in case the divRule is in effect
+                (team,rule) = test(self.tb_rules(teams), tb, gm, divRule, 0)
+
             r[team] = rule
             teams -= {team}
+            overall = overall.loc[list(teams)]
             tb = tb.loc[list(teams)]
             gm = gm.submatrix(tb.index)
 
