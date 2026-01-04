@@ -7,7 +7,7 @@ from time import time
 import numpy as np
 import pandas as pd
 
-from .utils import current_season, vmap, ivmap
+from .utils import current_season, vmap, ivmap, set_dtypes, stack_copy
 from .analytics import NFLTeamMatrix, NFLGameMatrix, NFLScenario, NFLScenarioMaker, NFLTiebreakerController, NFLTiebreakerError
 
 class NFLTeam():
@@ -348,6 +348,31 @@ class NFL():
 
         self.path = path
 
+    def dgames(self, season='reg'):
+        '''Returns a game*2 variant of the games dataframe for the specified season.
+           The result consists of 2 rows for every completed game with the teams and outcomes
+           reversed in the 2nd row. This is only used in stats computations at this
+           point, but might be useful down the road
+        '''
+
+        # start with the regular season, add 2 columns for indexes into the game*2 dataframe
+        rs = self.games_.xs(season)
+        rs = rs[rs['p']][['wk', 'at', 'ht', 'as', 'hs']]
+        rs['i1'] = range(0, len(rs)*2, 2)
+        rs['i2'] = range(1, len(rs)*2, 2)
+
+        games = pd.DataFrame(index=range(len(rs)*2), columns=['week','team','opp','wlt', 'scored', 'allowed'])
+        games.loc[::2, ['week','team','opp','scored','allowed']]  = rs.set_index('i1').rename(columns={'wk': 'week', 'at': 'team', 'ht': 'opp', 'as': 'scored', 'hs': 'allowed'})
+        games.loc[1::2, ['week','team','opp','scored','allowed']] = rs.set_index('i2').rename(columns={'wk': 'week', 'ht': 'team', 'at': 'opp', 'hs': 'scored', 'as': 'allowed'})
+        games['wlt'] = (games['scored'] - games['allowed']).apply(lambda x: 'win' if x > 0 else ('loss' if x < 0 else 'tie'))
+        set_dtypes(games, {'int16': ['week','scored','allowed'], 'string': ['team','opp','wlt']})
+
+        # add boolean flags for division and conference matchups
+        games['div'] = games['team'].map(lambda x: self.teams_[x]['div']) == games['opp'].map(lambda x: self.teams_[x]['div'])
+        games['conf'] = games['team'].map(lambda x: self.teams_[x]['conf']) == games['opp'].map(lambda x: self.teams_[x]['conf'])
+
+        return games
+
     def _stats(self):
         '''Return the master statistics table, building it first if necessary. Teams are ordered by conference,
         division and division rank. Changes to raw game scores (via load, set, etc) invalidate the table
@@ -371,42 +396,34 @@ class NFL():
             stats.loc[k, ['overall','division','conference', 'vic_stren', 'sch_stren', 'misc']] = 0
 
         # special dataframe of game info to streamline processing. Contains 2 rows per game for
-        # outcomes from each team's perspective. Perhaps someday this would be useful elsewhere
-        reg_season = self.games_.xs('reg')
-        games = pd.DataFrame(index=range(len(reg_season)*2), columns=['week','team','opp','wlt', 'scored', 'allowed'])
-        z = 0
-        for (_,game) in reg_season.iterrows():
-            if game['p']:
-                games.loc[z]   = [game['wk'], game['ht'], game['at'], NFL.result(game['hs'], game['as']), game['hs'], game['as']]
-                games.loc[z+1] = [game['wk'], game['at'], game['ht'], NFL.result(game['as'], game['hs']), game['as'], game['hs']]
-                z += 2
+        # outcomes from each team's perspective.
+        games = self.dgames('reg')
 
-        games.dropna(inplace=True)
+        # compute wlt sums
+        stack_copy(stats, 'overall', games.groupby(['team', 'wlt'])['week'].count().unstack().fillna(0))
+        stack_copy(stats, 'division', games[games['div']].groupby(['team', 'wlt'])['week'].count().unstack().fillna(0))
+        stack_copy(stats, 'conference', games[games['conf']].groupby(['team', 'wlt'])['week'].count().unstack().fillna(0))
 
-        for k,row in games.iterrows():
-            stats.loc[row.team][('overall',row.wlt)] += 1
-            stats.loc[row.team][('misc','pts-scored')] += row.scored
-            stats.loc[row.team][('misc','pts-allowed')] += row.allowed
-            if self.teams_[row.team]['div'] == self.teams_[row.opp]['div']:
-                stats.loc[row.team][('division',row.wlt)] += 1
+        z = games.groupby(['team'])[['scored', 'allowed']].sum()
+        stats[('misc', 'pts-scored')] = z['scored']
+        stats[('misc', 'pts-allowed')] = z['allowed']
 
-            if self.teams_[row.team]['conf'] == self.teams_[row.opp]['conf']:
-                stats.loc[row.team][('conference',row.wlt)] += 1
-                stats.loc[row.team][('misc','conf-pts-scored')] += row.scored
-                stats.loc[row.team][('misc','conf-pts-allowed')] += row.allowed
+        z = games[games['conf']].groupby(['team'])[['scored', 'allowed']].sum()
+        stats[('misc', 'conf-pts-scored')] = z['scored']
+        stats[('misc', 'conf-pts-allowed')] = z['allowed']
 
-        # strength of victory/schedule
-        for (k,row) in stats.iterrows():
+        # strength of victory/schedule - I can't figure out how to do these w/o iterating over teams(?)
+        for k in stats.index:
             # calculate strength of schedule and copy
-            t = games[games.team==k]['opp']
-            stats.loc[k]['sch_stren'] = stats.loc[t]['overall'].sum()
+            t = games[games['team']==k]['opp']
+            stack_copy(stats, 'sch_stren', stats.loc[t, 'overall'].sum().drop('pct'), key=k)
 
             # same for strength of victory
-            t = games[(games.team==k) & (games.wlt=='win')]['opp']
-            stats.loc[k]['vic_stren'] = stats.loc[t]['overall'].sum()
+            t = games[(games['team']==k) & (games['wlt']=='win')]['opp']
+            stack_copy(stats, 'vic_stren', stats.loc[t, 'overall'].sum().drop('pct'), key=k)
 
         # temporary table for calculating ranks - easier syntax
-        t = pd.concat([stats['conf'], stats['misc'][['pts-scored','pts-allowed']]], axis=1)
+        t = pd.concat([stats.xs('conf', axis=1), stats.xs('misc',axis=1)[['pts-scored','pts-allowed']]], axis=1)
         stats[('misc','rank-overall')] = (t['pts-scored'].rank() + t['pts-allowed'].rank(ascending=False)).rank()
 
         t['conf-off-rank'] = t.groupby('conf')['pts-scored'].rank()
@@ -414,8 +431,21 @@ class NFL():
         t['conf-rank'] = t['conf-off-rank'] + t['conf-def-rank']
         stats[('misc', 'rank-conf')] = t.groupby('conf')['conf-rank'].rank()
 
+        # 0 fill all NaNs - this needs to be done to compute percents
+        stats.iloc[:, 3:] = stats.iloc[:, 3:].fillna(0)
+
+        # compute pct columns - the Nan substitution below prevents potential div/0 errors (if a team hasn't played any games) 
         for i in ['overall','division','conference', 'sch_stren', 'vic_stren']:
             stats[(i,'pct')] = (stats[(i,'win')] + stats[(i,'tie')]*0.5) / stats[i].sum(axis=1).replace({0: np.nan})
+
+        # Finalize the structure
+        for col in stats.columns:
+            if col[1] == '':
+                stats[col] = stats[col].astype('string')
+            elif col[1] in ['pct', 'rank-conf', 'rank-overall']:
+                stats[col] = stats[col].astype('float32')
+            else:
+                stats[col] = stats[col].astype('int16')
 
         # sort by division tiebreakers
         self.stats = stats           # so that tiebreaks doesn't go recursive
@@ -428,6 +458,7 @@ class NFL():
             s.loc[z.index] = z.astype(s.dtype)
 
         self.stats = stats.assign(divrank=s).sort_values(['div','divrank']).drop('divrank', level=0, axis=1)
+
         return self.stats
 
     def stash(self):
@@ -492,6 +523,9 @@ class NFL():
     def _post_load(self):
         '''Perform cleanup operations after an update or load
         '''
+
+        # optimize dtypes on games
+        set_dtypes(self.games_, {'string': ['at','ht'], 'int16': ['wk','as','hs']})
 
         # divs_ and confs_ are dicts contains sets of team codes for each conference
         # and division. This are defined based on teams
@@ -963,12 +997,13 @@ class NFL():
             df = games.rename({ 'wk': 'week', 'ht': 'hteam', 'at': 'ateam', 'hs': 'hscore', 'as': 'ascore', 'ts': 'date'}, axis=1)
 
             if (df['p']==False).any():
-                # this assignment will change dtype to float64, so only do it if necessary
+                # this assignment will change dtype to float32, so only do it if necessary
                 df.loc[df['p']==False, ['ascore', 'hscore']] = np.nan
+                df[['ascore', 'hscore']] = df[['ascore', 'hscore']].astype('float32')
 
             df = df[['week', 'hteam', 'ateam', 'hscore', 'ascore', 'date']]
             if not ts:
-                df['date'] = df['date'].dt.strftime('%m/%d %H:%M')
+                df['date'] = df['date'].dt.strftime('%m/%d %H:%M').astype('string')
 
             if isinstance(teams, (str, NFLTeam)) and type(weeks) is int:
                 # need a special test here to make sure we have a data frame
@@ -1012,7 +1047,11 @@ class NFL():
 
         df['date'] = df['date'].astype('datetime64[ns]')
         if not ts:
-            df['date'] = df['date'].dt.strftime('%m/%d %H:%M')
+            df['date'] = df['date'].dt.strftime('%m/%d %H:%M').astype('string')
+
+        set_dtypes(df, {'string': ['opp', 'loc', 'wlt']})
+        for i in ['score','opp_score']:
+            df[i] = df[i].astype('float32' if df[i].isna().any() else 'int16')
 
         if isinstance(teams, str) and type(weeks) is int:
             return df.loc[(weeks,teams)]
@@ -1213,8 +1252,7 @@ class NFL():
 
         cols = ['win','loss','tie', 'pct', 'scored','allowed']
 
-        df = pd.DataFrame(index=list(teams), columns=cols)
-        df[df.columns] = 0
+        df = pd.DataFrame(0, index=list(teams), columns=cols, dtype='int16')
         df.columns.name = 'outcome'
         df.index.name = 'team'
 
@@ -1250,7 +1288,7 @@ class NFL():
                         m.loc[game['at'], game['ht']] += 0.5
 
 
-        df['pct'] = (df['win'] + df['tie'] * 0.5) / df.drop(columns=['scored','allowed'], errors='ignore').sum(axis=1)
+        df['pct'] = ((df['win'] + df['tie'] * 0.5) / df.drop(columns=['scored','allowed'], errors='ignore').sum(axis=1)).astype('float32')
         df.sort_values('pct', ascending=False, inplace=True)
         
         if result == 'long':
@@ -1311,7 +1349,7 @@ class NFL():
             'victory-strength', 'schedule-strength', 'conference-rank', 'overall-rank',
             'common-netpoints', 'conference-netpoints', 'overall-netpoints', 'net-touchdowns']
         columns = pd.MultiIndex.from_product([teams, ['win','loss','tie', 'pct']], names=['team','outcome'])
-        df = pd.DataFrame(np.nan, index=rules, columns=columns)
+        df = pd.DataFrame(np.nan, index=rules, columns=columns, dtype='float32')
 
         stats = self._stats()
         if self.netTouchdowns:

@@ -482,7 +482,7 @@ class NFLGameMatrix(pd.DataFrame):
         '''
 
         t = list(teams)
-        super().__init__(0.0, columns=t, index=t)
+        super().__init__(0.0, columns=t, index=t, dtype='float32')
         self.columns.name = 'opp'
         self.index.name = 'name'
         for n in teams:
