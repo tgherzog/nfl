@@ -276,6 +276,7 @@ class NFL():
         self.games_  = None
         self.week = None
         self.stats = None
+        self._dgames = None
         self.year = year
         self.season = season or 'reg'
         self.engine = engine
@@ -350,22 +351,27 @@ class NFL():
 
         self.path = path
 
-    def dgames(self, season='reg'):
+    def dgames(self, allGames=False, season=None):
         '''Returns a game*2 variant of the games dataframe for the specified season.
            The result consists of 2 rows for every completed game with the teams and outcomes
            reversed in the 2nd row. This is only used in stats computations at this
            point, but might be useful down the road
         '''
 
+        season = season or self.season
+
+        if self._dgames is not None and season == 'reg' and allGames == False:
+            return self._dgames
+
         # start with the regular season, add 2 columns for indexes into the game*2 dataframe
         rs = self.games_.xs(season)
-        rs = rs[rs['p']][['wk', 'at', 'ht', 'as', 'hs']]
-        rs['i1'] = range(0, len(rs)*2, 2)
-        rs['i2'] = range(1, len(rs)*2, 2)
+        if allGames == False:
+            rs = rs[rs['p']]
 
-        games = pd.DataFrame(index=range(len(rs)*2), columns=['week','team','opp','wlt', 'scored', 'allowed'])
-        games.loc[::2, ['week','team','opp','scored','allowed']]  = rs.set_index('i1').rename(columns={'wk': 'week', 'at': 'team', 'ht': 'opp', 'as': 'scored', 'hs': 'allowed'})
-        games.loc[1::2, ['week','team','opp','scored','allowed']] = rs.set_index('i2').rename(columns={'wk': 'week', 'ht': 'team', 'at': 'opp', 'hs': 'scored', 'as': 'allowed'})
+        rs = rs[['wk', 'at', 'ht', 'as', 'hs']].rename(columns={'wk': 'week'})
+
+        games = pd.concat([rs.rename(columns={'at': 'team', 'ht': 'opp', 'as': 'scored', 'hs': 'allowed'}),
+                    rs.rename(columns={'ht': 'team', 'at': 'opp', 'hs': 'scored', 'as': 'allowed'})], ignore_index=True)
         games['wlt'] = (games['scored'] - games['allowed']).apply(lambda x: 'win' if x > 0 else ('loss' if x < 0 else 'tie'))
         set_dtypes(games, {'int16': ['week','scored','allowed'], 'string': ['team','opp','wlt']})
 
@@ -373,7 +379,18 @@ class NFL():
         games['div'] = games['team'].map(lambda x: self.teams_[x]['div']) == games['opp'].map(lambda x: self.teams_[x]['div'])
         games['conf'] = games['team'].map(lambda x: self.teams_[x]['conf']) == games['opp'].map(lambda x: self.teams_[x]['conf'])
 
+        if season == 'reg' and allGames == False:
+            self._dgames = games
+
         return games
+
+    def _dirty(self):
+        '''Sets the statistics state to 'dirty', meaning game scores have changed and cached
+           data should be tossed and rebuilt
+        '''
+
+        self.stats =None
+        self._dgames = None
 
     def _stats(self):
         '''Return the master statistics table, building it first if necessary. Teams are ordered by conference,
@@ -399,7 +416,7 @@ class NFL():
 
         # special dataframe of game info to streamline processing. Contains 2 rows per game for
         # outcomes from each team's perspective.
-        games = self.dgames('reg')
+        games = self.dgames()
 
         # compute wlt sums
         stack_copy(stats, 'overall', games.groupby(['team', 'wlt'])['week'].count().unstack().fillna(0))
@@ -570,7 +587,7 @@ class NFL():
         if self.season not in self.seasons_:
             self.season = list(self.seasons_.keys())[0]
 
-        self.stats = None
+        self._dirty()
 
     @property
     def scoreboard(self):
@@ -784,7 +801,7 @@ class NFL():
                 elif v == 'tie':
                     self.games_.loc[k, c] = [0, 0, True]
 
-            self.stats = None
+            self._dirty()
             return
 
         elif isinstance(ref, pd.Series):
@@ -864,7 +881,7 @@ class NFL():
 
                 self.games_.loc[k, ['hs', 'as', 'p']] = [hscore, ascore, True]
 
-        self.stats = None # signal to rebuild stats
+        self._dirty()
 
     def clear(self, week, teams=None, season=None):
         '''Clear scores for a given week or weeks
@@ -878,7 +895,7 @@ class NFL():
         z = self.gameFrame(teams, week, season=season)[['p']]
         z.loc[:] = False
         self.games_.update(pd.concat({season: z}, names=['season']))
-        self.stats = None
+        self._dirty()
 
 
     def gameFrame(self, teams=None, weeks=None, allGames=False, season=None):
@@ -1049,11 +1066,17 @@ class NFL():
 
         df['date'] = df['date'].astype('datetime64[ns]')
         if not ts:
-            df['date'] = df['date'].dt.strftime('%m/%d %H:%M').astype('string')
+            df['date'] = df['date'].dt.strftime('%m/%d %H:%M')
 
-        set_dtypes(df, {'string': ['opp', 'loc', 'wlt']})
+        # conditional conversion of scores: float32 preserves NaNs if present
         for i in ['score','opp_score']:
             df[i] = df[i].astype('float32' if df[i].isna().any() else 'int16')
+
+        # don't convert strings or we'll blow the NaNs
+        if df['opp'].isna().any() == False:
+            set_dtypes(df, {'string': ['opp', 'loc', 'wlt']})
+            if not ts:
+                df['date'] = df['date'].astype('string')
 
         if isinstance(teams, str) and type(weeks) is int:
             return df.loc[(weeks,teams)]
@@ -1230,7 +1253,7 @@ class NFL():
 
         return tds
 
-    def wlt(self, teams=None, within=None, weeks=None, allGames=False, season=None, result='short'):
+    def wlt(self, teams=None, within=None, weeks=None, season=None, result='short'):
         '''Return the wlt stats of one or more teams
 
         teams:  team code or list of team codes
@@ -1241,64 +1264,96 @@ class NFL():
 
         season: override default season
 
-        allGames: return all games (includes unplayed games)
-
-        result: the type of result needed. 'short' is by far the most common, but you can also specify
-                'long' - include score columns
-                'extended' - return a tuple, first element is the long-style wlt table, 2nd element
-                is a team matrix of games played against each other
+        result: 'long' will also include aggregate points scored and allowed
         '''
 
         teams  = self._list(teams)
         within = self._list(within)
+        weeks  = self._weeks(weeks)
+
+        g = self.dgames(season=season)
+        i = None
+        if teams is not None:
+            i = g['team'].isin(teams)
+
+        if within is not None:
+            i2 = g['opp'].isin(within)
+            i = i2 if i is None else i & i2
+
+        if weeks is not None:
+            i2 = g['week'].isin(weeks)
+            i = i2 if i is None else i & i2
+
+        if i is not None:
+            g = g[i]
 
         cols = ['win','loss','tie', 'pct', 'scored','allowed']
-
         df = pd.DataFrame(0, index=list(teams), columns=cols, dtype='int16')
         df.columns.name = 'outcome'
         df.index.name = 'team'
 
-        # define a matrix of games played against opponents
-        m = NFLGameMatrix(teams)
+        x = g.groupby(['team','wlt'])['week'].count().unstack().fillna(0).astype('int16')
+        df[x.columns] = x
 
-        for game in self.games(teams, weeks=weeks, allGames=allGames, season=season):
-            if game['ht'] in teams and (within is None or game['at'] in within):
-                z = NFL.result(game['hs'], game['as'])
-                if z:
-                    df.loc[game['ht'], z] += 1
-                    df.loc[game['ht'], 'scored'] += game['hs']
-                    df.loc[game['ht'], 'allowed'] += game['as']
+        x = g.groupby('team')[['scored','allowed']].sum().astype('int16')
+        df[x.columns] = x
 
-                if game['at'] in m.columns:
-                    if z == 'win':
-                        m.loc[game['ht'], game['at']] += 1
-                    elif z == 'tie':
-                        m.loc[game['ht'], game['at']] += 0.5
+        df['pct'] = ((df['win'] + df['tie']*0.5) / df[['win','loss','tie']].sum(axis=1)).astype('float32')
 
-            if game['at'] in teams and (within is None or game['ht'] in within):
-                z = NFL.result(game['as'], game['hs'])
-                if z:
-                    df.loc[game['at'], z] += 1
-                    df.loc[game['at'], 'scored'] += game['as']
-                    df.loc[game['at'], 'allowed'] += game['hs']
-
-
-                if game['ht'] in m.columns:
-                    if z == 'win':
-                        m.loc[game['at'], game['ht']] += 1
-                    elif z == 'tie':
-                        m.loc[game['at'], game['ht']] += 0.5
-
-
-        df['pct'] = ((df['win'] + df['tie'] * 0.5) / df.drop(columns=['scored','allowed'], errors='ignore').sum(axis=1)).astype('float32')
-        df.sort_values('pct', ascending=False, inplace=True)
-        
         if result == 'long':
             return df
-        elif result == 'extended':
-            return (df, m)
 
         return df.drop(columns=['scored','allowed'])
+
+
+    def matrix(self, teams=None, weeks=None, allGames=False, season=None):
+        ''' Return an NFLGameMatrix for the specified teams
+
+            teams:  team code or list of team codes
+
+            weeks:  limit to specified weeks
+
+            season: override default season
+
+            allGames: include both played and unplayed games. In this case the
+                      matrix will include games played by each team against the
+                      others (not games *won*) in the entire schedule,
+                      and both sides of the matrix will be the same. Note that 
+                      NFLGameMatrix functions that assume the matrix contains win/loss
+                      tallies will be useless
+        '''
+
+        teams  = self._list(teams)
+        weeks  = self._weeks(weeks)
+
+        g = self.dgames(allGames=allGames, season=season)
+        i = None
+        if teams is not None:
+            i = g['team'].isin(teams)
+
+        if weeks is not None:
+            i2 = g['week'].isin(weeks)
+            i = i2 if i is None else i & i2
+
+        if i is not None:
+            g = g[i]
+
+        # now that g is defined, NFLGameMatrix will complain if we don't actually have teams
+        if teams is None:
+            teams = self.teams_.keys()
+
+        if allGames:
+            df = g.pivot_table(index='team', columns='opp', aggfunc='count', values='week', fill_value=0)
+            return NFLGameMatrix(teams=teams, data=df)
+
+        wins = g[g['wlt']=='win'].pivot_table(index='team', columns='opp', aggfunc='count', values='week', fill_value=0)
+        ties = g[g['wlt']=='tie'].pivot_table(index='team', columns='opp', aggfunc='count', values='week', fill_value=0)
+
+        # Doing the compute this way ensures that all teams are present even if they
+        # don't win or tie over the given range. However, the add operation changes
+        # the resulting class, so we have recast the result
+        df = pd.DataFrame(NFLGameMatrix(teams)).add(wins, fill_value=0).add(ties*0.5, fill_value=0)
+        return NFLGameMatrix(teams=teams, data=df)
 
     def team_stats(self, team):
         '''Return stats for a single team
@@ -1360,7 +1415,8 @@ class NFL():
             ntd = {}
 
         if strict:
-            (h2h,gm) = self.wlt(teams, within=teams, season='reg', result='extended')
+            h2h = self.wlt(teams, within=teams, season='reg', result='long')
+            gm  = self.matrix(teams)
             co  = self.wlt(teams, within=self.opponents(teams), season='reg', result='long')
 
         for team in teams:
