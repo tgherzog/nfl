@@ -9,6 +9,7 @@ import pandas as pd
 
 from .utils import current_season, vmap, ivmap, set_dtypes, stack_copy
 from .analytics import NFLTeamMatrix, NFLGameMatrix, NFLScenario, NFLScenarioMaker, NFLTiebreakerController, NFLTiebreakerError
+from .__version__ import __version__
 
 class NFLTeam():
     '''an NFL team, typically obtained by calling the NFL object with the team code
@@ -266,6 +267,7 @@ class NFL():
     '''
 
     def __init__(self, year=None, season=None, engine=None, display='user'):
+        self.__version__ = __version__
         self.teams_  = {}
         self.divs_   = {}
         self.confs_  = {}
