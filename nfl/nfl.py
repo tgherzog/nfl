@@ -1100,26 +1100,17 @@ class NFL():
             raise ValueError("teams cannot be None here")
 
         teams = self._list(teams)
+        weeks = self._weeks(weeks)
 
-        ops = {t:set() for t in teams}
+        g = self.dgames(allGames=allGames, season=season)
 
-        for game in self.games(teams, weeks=weeks, allGames=allGames, season=season):
-            if game['ht'] in ops:
-                ops[game['ht']].add(game['at'])
+        # NB: this filter is more compact than usual since teams can't be None
+        i = g['team'].isin(teams)
+        if weeks is not None:
+            i &= g['week'].isin(weeks)
 
-            if game['at'] in ops:
-                ops[game['at']].add(game['ht'])
-
-        # Resulting set is common (intersection) of opponents excluding the teams themselves
-        z = None
-        for s in ops.values():
-            if z is None:
-                z = s
-            else:
-                z &= s
-
-        z -= set(teams)
-        return z
+        g = g[i]
+        return set.intersection( *g.groupby('team')['opp'].unique().apply(lambda x: set(x)) )
 
     def roster(self, team):
         '''Return team roster
