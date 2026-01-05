@@ -1998,12 +1998,12 @@ class NFLDataFrame(pd.DataFrame):
         
         def remap_val(s):
             t = self.host.teams_
-            return s.map(lambda x: '{} {:>3}'.format(t.get(x,{}).get('short'), x) if x in t else '')
+            return s.map(lambda x: '{} {:>3}'.format(t.get(x,{}).get('short'), x) if x in t else x)
 
         def remap_idx(s):
-            fd_size = max(map(lambda x: len(self.host.teams_[x]['short']), s))
             t = self.host.teams_
-            return s.map(lambda x: '{} {:>3}'.format(t.get(x,{}).get('short').ljust(fd_size), x) if x in t else '')
+            fd_size = max(map(lambda x: len(t.get(x,{}).get('short',x)), s))
+            return s.map(lambda x: '{} {:>3}'.format(t.get(x,{}).get('short',x).ljust(fd_size), x) if x in t else x)
 
         field_names = ['opp', 'team', 'hteam', 'ateam', ('team','away'), ('team','home')]
 
