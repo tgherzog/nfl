@@ -8,7 +8,8 @@ import numpy as np
 import pandas as pd
 
 from .utils import current_season, vmap, ivmap, set_dtypes, stack_copy, param_exc
-from .analytics import NFLTeamMatrix, NFLGameMatrix, NFLScenario, NFLScenarioMaker, NFLTiebreakerController, NFLTiebreakerError, NFLSeasonWrapper
+from .analytics import NFLTeamMatrix, NFLGameMatrix, NFLScenario, NFLScenarioMaker, NFLTiebreakerController, NFLSeasonWrapper
+from .errors import *
 from .__version__ import __version__
 
 class NFLTeam():

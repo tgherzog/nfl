@@ -2,6 +2,7 @@
 import pandas as pd
 import numpy as np
 from .utils import vmap, ivmap, is_listlike, param_exc
+from .errors import *
 from .sequence import reorder, expand, expand_len, expand_width
 import math
 
@@ -262,6 +263,11 @@ class NFLScenarioMaker():
        with NFLScenarioMaker(nfl, 'NFC-North', -1) as gen, tqdm(gen) as tgen:
           for scenario in tgen:
             ...
+
+       Note that while technically you can initialize with all teams and/or weeks
+       by passing None, this is only useful towards the end of the season when
+       most games have either been played or stipulated using NFL.set. Otherwise
+       there's simply too many potential outcomes to be meaningfully processed
     '''
 
     def __init__(self, nfl, teams, weeks, ties=True):
@@ -288,8 +294,16 @@ class NFLScenarioMaker():
 
         # get scope of games in this run
         gm = self.nfl.games_
-        gm = gm[(gm.index.get_level_values(0)=='reg') & gm['wk'].isin(self.weeks) & \
-                    (gm['ht'].isin(self.teams) | gm['at'].isin(self.teams)) & (gm['p']==False)]
+
+        c = (gm.index.get_level_values(0)=='reg') & (gm['p']==False)
+
+        if self.teams is not None:
+            c &= gm['ht'].isin(self.teams) | gm['at'].isin(self.teams)
+
+        if self.weeks is not None:
+            c &= gm['wk'].isin(self.weeks)
+
+        gm = gm[c]
 
         # The games index defines the structure for each scenario
         self.games = gm[['wk','at','ht']]
@@ -327,6 +341,10 @@ class NFLScenarioMaker():
             else:
                 for elem in x:
                     yield z + [elem]
+
+        if len(self.games) == 0:
+            msg = 'There are no undetermined games in scope teams={}, weeks={}'.format(self.teams, self.weeks)
+            raise NFLScenarioError(msg)
 
         s = NFLScenario.from_generator(self, 0, index=self.games.index, name='outcome')
         values = ('win','loss','tie')
