@@ -431,15 +431,14 @@ class NFL():
         stats[('misc', 'conf-pts-scored')] = z['scored']
         stats[('misc', 'conf-pts-allowed')] = z['allowed']
 
-        # strength of victory/schedule - I can't figure out how to do these w/o iterating over teams(?)
-        for k in stats.index:
-            # calculate strength of schedule and copy
-            t = games[games['team']==k]['opp']
-            stack_copy(stats, 'sch_stren', stats.loc[t, 'overall'].sum().drop('pct'), key=k)
+        # strength of victory/schedule
+        z = games[['team','opp']].merge(games[['team','wlt']].rename(columns={'team': 't2'}),
+                left_on='opp', right_on='t2', how='left').drop(columns='t2')
+        stack_copy(stats, 'sch_stren', z.groupby(['team','wlt'])['opp'].count().unstack().fillna(0))
 
-            # same for strength of victory
-            t = games[(games['team']==k) & (games['wlt']=='win')]['opp']
-            stack_copy(stats, 'vic_stren', stats.loc[t, 'overall'].sum().drop('pct'), key=k)
+        z = games[games['wlt']=='win'][['team','opp']].merge(games[['team','wlt']].rename(columns={'team': 't2'}),
+                left_on='opp', right_on='t2', how='left').drop(columns='t2')
+        stack_copy(stats, 'vic_stren', z.groupby(['team','wlt'])['opp'].count().unstack().fillna(0))
 
         # temporary table for calculating ranks - easier syntax
         t = pd.concat([stats.xs('conf', axis=1), stats.xs('misc',axis=1)[['pts-scored','pts-allowed']]], axis=1)
@@ -1090,10 +1089,15 @@ class NFL():
         return df
 
 
-    def opponents(self, teams, weeks=None, allGames=False, season=None):
+    def opponents(self, teams, weeks=None, allGames=False, result='set', season=None):
         ''' Returns the set of common opponents of one or more teams
 
             The teams argument can be a single team or a list.
+
+            If result == 'set' the function returns a set of opponent team codes
+
+            If result == 'games' the function returns a Series of number of games played
+            against common opponents, indexed by team
         '''
 
         if teams is None:
@@ -1110,7 +1114,14 @@ class NFL():
             i &= g['week'].isin(weeks)
 
         g = g[i]
-        return set.intersection( *g.groupby('team')['opp'].unique().apply(lambda x: set(x)) )
+
+        opps = set.intersection( *g.groupby('team')['opp'].unique().apply(lambda x: set(x)) )
+
+        if result == 'set':
+            return opps
+        elif result == 'games':
+            return g[g['opp'].isin(opps)].groupby('team')['week'].count()
+
 
     def roster(self, team):
         '''Return team roster
@@ -1471,22 +1482,23 @@ class NFL():
            controller A variation of NFLTiebreakerController. Pass None to use the default class
         '''
 
-        if controller is None:
-            controller = NFLTiebreakerController(self, teams)
-
         teams = set(self._list(teams))  # important to ensure we work from a copy
         limit = limit or len(teams)
         r = pd.Series(name='level')
         logger = logging.getLogger('nfl')
         isLog = logger.isEnabledFor(logging.INFO)
 
-        # shortcuts for efficiency: implement before call to _stats for speed
+        # shortcuts for efficiency: for speed, do these before allocating the controller
         if len(teams) == 0:
             return r
         elif len(teams) == 1:
             team = teams.pop()
             r[team] = 'overall'
             return r
+
+        if controller is None:
+            controller = NFLTiebreakerController(self, teams)
+
 
         def msg(depth, text, target=None, pool=None, rule=None):
 
@@ -1511,7 +1523,7 @@ class NFL():
             text = prefix + 'tiebreaks: {}'.format(text)
             logger.info(text)
 
-        def test(rules, tb, gm, divRule, depth):
+        def test(rules, teams, divRule, depth):
             '''Evaluates teams according to the given set of rules
 
                tb is a derivative of a DataSet from tiebreakers, just the 'pct' columns,
@@ -1528,12 +1540,12 @@ class NFL():
             # can't yet accurately sort for things like head-to-head and common-games
             # Sorting has to happen incrementally
 
-            (team,rule) = controller.tiebreaker(tb.index)
+            teams = teams.copy() # make sure we're working on a copy
+            (team,rule) = controller.tiebreaker(teams)
             if team:
-                if isLog: msg(depth, 'cache', rule=rule, target=team, pool=tb.index)
+                if isLog: msg(depth, 'cache', rule=rule, target=team, pool=teams)
                 return (team, rule)
 
-            teams = set(tb.index)
             divs  = set( map(lambda x: self.teams_[x]['div'], teams) )
 
             # apply division tiebreaker
@@ -1554,30 +1566,10 @@ class NFL():
                     # prune eligible teams to 1 in each division
                     for d in dt.values():
                         if len(d) > 1:
-                            t = tb.loc[list(d)].copy()
-                            g = gm.submatrix(t.index)
                             if isLog: msg(depth, 'divRule', pool=d)
-                            (winner,rule) = test(controller.rules('div'), t, g, False, depth+1)
+                            (winner,rule) = test(controller.rules('div'), d, False, depth+1)
                             controller.tiebreaker(d, winner, rule)
                             teams -= d - {winner}
-
-                    if len(teams) < len(tb.index):
-                        # shorten the teams
-                        tb = tb.loc[list(teams)]
-                        gm = gm.submatrix(tb.index)
-
-
-            # recompute head-to-head
-            if 'head-to-head' in rules:
-                for i in teams:
-                    tb.loc[i, 'head-to-head'] = gm.pct(i)
-
-            # now sort on rules, up to common-games if present
-            s = rules
-            if 'common-games' in s:
-                s = s[:s.index('common-games')]
-
-            tb = tb.sort_values(s, ascending=False)
 
             # cycle through the rules
             for rule in rules:
@@ -1588,52 +1580,37 @@ class NFL():
 
                 if rule == 'head-to-head' and len(divs) > 1 and len(teams) > 2:
                     # special case for ties amongst 3+ teams across divisions
-                    (sweeper,s) = gm.sweep()
+                    (sweeper,s) = controller.gamematrix().submatrix(teams).sweep()
                     if s == 1:
-                        if isLog: msg(depth, 'sweep in', rule=rule, target=sweeper, pool=gm.index)
+                        if isLog: msg(depth, 'sweep in', rule=rule, target=sweeper, pool=teams)
                         return (sweeper, rule)
 
                     elif s == 0:
                         # Drop the losing team and restart with the remainders
-                        t = tb.loc[list(teams - {sweeper})].copy()
-                        g = gm.submatrix(t.index)
-                        if isLog: msg(depth, 'sweep out', rule=rule, target=sweeper, pool=gm.index)
-                        return test(controller.rules(t.index), t, g, divRule, depth+1)
+                        keepers = teams - {sweeper}
+                        if isLog: msg(depth, 'sweep out', rule=rule, target=sweeper, pool=teams)
+                        return test(controller.rules(keepers), keepers, divRule, depth+1)
 
                     else:
                         continue
 
-                elif rule == 'common-games':
+                elif rule == 'common-games' and len(divs) > 1:
                     # this flag is set to False if any team fails to meet the
                     # minimum number of required games
-                    legal = True
-
-                    wlt = self.wlt(tb.index, within=self.opponents(tb.index), result='long')
-                    for (i,row) in wlt.iterrows():
-                        tb.loc[i, ['common-games', 'common-netpoints']] = [row['pct'], row['scored']-row['allowed']]
-                        if len(divs) > 1 and row[['win','loss','tie']].sum() < 4:
-                            legal = False
-
-                    # now that these are accurate, we need to update the sort
-                    tb.sort_values(rules, ascending=False)
-
-                    if not legal:
+                    if (self.opponents(teams, result='games') < 4).any():
                         continue
 
                 # count the teams that tie for this rule - teams should be sorted by now
-                r = tb[rule]
+                r = controller.stat(rule, teams).sort_values(ascending=False)
                 k = len( r[r==r.iloc[0]] )
                 if k == 1:
                     if isLog: msg(depth, 'select', target=r.index[0], pool=r.index, rule=rule)
                     controller.tiebreaker(r.index, r.index[0], rule)
                     return (r.index[0], rule)
-                elif k > 0 and k < len(tb):
+                elif k > 0 and k < len(teams):
                     # restart with just the tied clubs
-                    t = tb.loc[list(tb.index[:k])].copy()
-                    g = gm.submatrix(t.index)
-
-                    if isLog: msg(depth, 'tiebreaker', target=t.index, pool=tb.index)
-                    return test(controller.rules(t.index), t, g, divRule, depth+1)
+                    if isLog: msg(depth, 'tiebreaker', target=r.index[:k], pool=r.index)
+                    return test(controller.rules(r.index[:k]), r.index[:k], divRule, depth+1)
 
                 # otherwise, everyone ties, so proceed to the next rule
 
@@ -1643,9 +1620,7 @@ class NFL():
 
 
         # Assess overall record at the top level to avoid heavy computes if possible
-        tb = controller.tiebreakers().loc[list(teams)]
-        gm = None
-        overall = tb['overall']
+        overall = controller.stat('overall', list(teams))
 
         while len(teams) > 1:
             if len(r) >= limit:
@@ -1657,18 +1632,12 @@ class NFL():
                 rule = 'overall'
                 if isLog: msg(0, 'select', target=team, rule='overall')
             else:
-                if gm is None:
-                    gm = controller.gamematrix().submatrix(teams)
-
                 # NB: we have to pass in all teams in case the divRule is in effect
-                (team,rule) = test(controller.rules(teams), tb, gm, divRule, 0)
+                (team,rule) = test(controller.rules(teams), teams, divRule, 0)
 
             r[team] = rule
             teams -= {team}
             overall = overall.loc[list(teams)]
-            tb = tb.loc[list(teams)]
-            if gm is not None:
-                gm = gm.submatrix(tb.index)
 
         # should always be one team left (runt of the litter)
         team = teams.pop()

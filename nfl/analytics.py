@@ -565,15 +565,6 @@ class NFLGameMatrix(pd.DataFrame):
 
         return (None,None)
 
-    def submatrix(self, teams):
-        ''' Return a submatrix of the current matrix for the specified teams
-        '''
-
-        if type(teams) is set:
-            teams = list(teams)        
-
-        return self.loc[teams, teams]
-
 class NFLTiebreakerController(object):
 
     def __init__(self, nfl, teams):
@@ -583,10 +574,13 @@ class NFLTiebreakerController(object):
         self.tb_cache = {}
         self.tb = None
         self.gm = None
-        self.teams = nfl._list(teams)
+        self.teams = list(nfl._list(teams))
 
         for i in ('div','conf'):
             self.tb_rules[i] = self.get_rules(i)
+
+        stats = nfl._stats()
+        self.stats = stats.loc[self.teams]
 
     def get_rules(self, n):
         '''Return the rule list for category n (div|conv)
@@ -613,6 +607,49 @@ class NFLTiebreakerController(object):
 
         return rules
 
+    def stat(self, rule, teams):
+        ''' Return statistics for a specified rule. This should be a Series indexed by team
+        '''
+
+        # rule/column mappings for when they differ
+        lookup = {'victory-strength': ('vic_stren','pct'), 'schedule-strength': ('sch_stren','pct'),
+                    'conference-rank': ('misc', 'rank-conf'), 'overall-rank': ('misc','rank-overall')}
+
+        stats = self.stats
+        if type(teams) is set:
+            teams = list(teams) 
+
+        if rule == 'head-to-head':
+            gm = self.gamematrix(teams)
+            s = pd.Series(np.nan, index=gm.index)
+            for i in gm.index:
+                s[i] = gm.pct(i)
+
+            return s
+
+        elif rule == 'common-games':
+            return self.nfl.wlt(teams, within=self.nfl.opponents(teams), result='long')['pct']
+
+        elif rule == 'common-netpoints':
+            s = self.nfl.wlt(teams, within=self.nfl.opponents(teams), result='long')
+            return (s['scored'] - s['allowed'])
+
+        elif rule == 'overall-netpoints':
+            return stats.loc[teams, ('misc','pts-scored')] - stats.loc[teams, ('misc','pts-allowed')]
+
+        elif rule == 'conference-netpoints':
+            return stats.loc[teams, ('misc','conf-pts-scored')] - stats.loc[teams, ('misc','conf-pts-allowed')]
+
+        elif rule == 'net-touchdowns':
+            # TODO: implement team-level caching - this hits the API so it's super slow
+            return pd.Series(self.nfl.net_stats(teams))
+
+        else:
+            col = lookup.get(rule, (rule,'pct'))
+            return stats.loc[teams, col]
+
+        
+
     def tiebreaker(self, teams, winner=None, rule=''):
         '''Get or set a tiebreaker outcome from cache
         '''
@@ -634,14 +671,17 @@ class NFLTiebreakerController(object):
 
         return self.tb
 
-    def gamematrix(self):
+    def gamematrix(self, teams):
         '''Return an NFLGameMatridx for the specified teams, ideally from cache
         '''
 
         if self.gm is None:
             self.gm = self.nfl.matrix(self.teams)
 
-        return self.gm
+        if type(teams) is set:
+            teams = list(teams) 
+
+        return self.gm.loc[teams, teams]
 
 
     def rules(self, teams):
