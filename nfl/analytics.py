@@ -281,14 +281,14 @@ class NFLScenarioMaker():
 
         # get scope of games in this run
         gm = self.nfl.games_
-        gm = gm[(gm.index.get_level_values(0)==self.nfl.season) & gm['wk'].isin(self.weeks) & \
+        gm = gm[(gm.index.get_level_values(0)=='reg') & gm['wk'].isin(self.weeks) & \
                     (gm['ht'].isin(self.teams) | gm['at'].isin(self.teams)) & (gm['p']==False)]
 
         # The games index defines the structure for each scenario
         self.games = gm[['wk','at','ht']]
 
         # complete and incomplete are transformations of games.index, structured by [week,team]
-        sch = self.nfl.schedule(self.teams, self.weeks, by='team')
+        sch = self.nfl.schedule(self.teams, self.weeks, by='team', season='reg')
         self.completed = sch.dropna().index
         self.incomplete = sch.index.drop(self.completed)
         return self
@@ -710,7 +710,7 @@ class NFLTiebreakerController(object):
         '''
 
         if self.gm is None:
-            self.gm = self.nfl.matrix(self.teams)
+            self.gm = self.nfl.matrix(self.teams, season='reg')
 
         if type(teams) is set:
             teams = list(teams) 
