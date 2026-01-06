@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from .utils import current_season, vmap, ivmap, set_dtypes, stack_copy, param_exc
-from .analytics import NFLTeamMatrix, NFLGameMatrix, NFLScenario, NFLScenarioMaker, NFLTiebreakerController, NFLTiebreakerError
+from .analytics import NFLTeamMatrix, NFLGameMatrix, NFLScenario, NFLScenarioMaker, NFLTiebreakerController, NFLTiebreakerError, NFLSeasonWrapper
 from .__version__ import __version__
 
 class NFLTeam():
@@ -376,8 +376,19 @@ class NFL():
         set_dtypes(games, {'int16': ['week','scored','allowed'], 'string': ['team','opp','wlt']})
 
         # add boolean flags for division and conference matchups
-        games['div'] = games['team'].map(lambda x: self.teams_[x]['div']) == games['opp'].map(lambda x: self.teams_[x]['div'])
-        games['conf'] = games['team'].map(lambda x: self.teams_[x]['conf']) == games['opp'].map(lambda x: self.teams_[x]['conf'])
+
+        # NB: here's an example of how teams_ might work as a dataframe instead of the existing
+        # dict and mapping values with a lambda function. Perhaps down the road we'll replace
+        # teams_ with a persistent DataFrame, but for now the spot conversion isn't bad
+        t = pd.DataFrame.from_dict(self.teams_, orient='index')
+
+        # temporarily add division and conference codes for each team. This is safer than
+        # dict lookups when doing pre- and post-season where schedules may contain invalid team codes
+        z = games.join(t[['conf','div']].rename(lambda x: 't'+x,axis=1), on='team').join(t[['conf','div']].rename(lambda x: 'o'+x, axis=1), on='opp')
+
+        # NB this means that matchups between TBD teams are considered in the same division and conference
+        games['div'] = z['tdiv'] == z['odiv']
+        games['conf'] = z['tconf'] == z['oconf']
 
         if season == 'reg' and allGames == False:
             self._dgames = games
@@ -416,7 +427,7 @@ class NFL():
 
         # special dataframe of game info to streamline processing. Contains 2 rows per game for
         # outcomes from each team's perspective.
-        games = self.dgames()
+        games = self.dgames(season='reg')
 
         # compute wlt sums
         stack_copy(stats, 'overall', games.groupby(['team', 'wlt'])['week'].count().unstack().fillna(0))
@@ -1113,8 +1124,10 @@ class NFL():
             i &= g['week'].isin(weeks)
 
         g = g[i]
-
-        opps = set.intersection( *g.groupby('team')['opp'].unique().apply(lambda x: set(x)) )
+        if len(g) > 0:
+            opps = set.intersection( *g.groupby('team')['opp'].unique().apply(lambda x: set(x)) )
+        else:
+            opps = set()
 
         if counts:
             if len(opps):
@@ -1420,16 +1433,17 @@ class NFL():
             # sanity checks
             divs = set( map(lambda x: self.teams_[x]['div'], teams) )
 
-            gm = self.matrix(teams)
-            # For head-to-head to be valid: 1) all teams must have played the
-            # same number of games against each other, and 2) for wildcards, there
-            # must be a "clean sweep" winner or loser, else the rule is invalid
-            if not gm.same() or (len(divs) > 1 and len(teams) > 2 and gm.sweep()[0] is None):
-                df.loc['head-to-head', (slice(None), 'pct')] = np.inf
+            with NFLSeasonWrapper(self):
+                gm = self.matrix(teams)
+                # For head-to-head to be valid: 1) all teams must have played the
+                # same number of games against each other, and 2) for wildcards, there
+                # must be a "clean sweep" winner or loser, else the rule is invalid
+                if not gm.same() or (len(divs) > 1 and len(teams) > 2 and gm.sweep()[0] is None):
+                    df.loc['head-to-head', (slice(None), 'pct')] = np.inf
 
-            # there must be at least 4 games for the common-games wildcard tiebreaker
-            if len(divs) > 1 and (self.opponents(teams, counts=True) < 4).any():
-                df.loc['common-games', (slice(None), 'pct')] = np.inf
+                # there must be at least 4 games for the common-games wildcard tiebreaker
+                if len(divs) > 1 and (self.opponents(teams, counts=True) < 4).any():
+                    df.loc['common-games', (slice(None), 'pct')] = np.inf
 
         return df
 
@@ -1492,15 +1506,6 @@ class NFL():
 
         def test(rules, teams, divRule, depth):
             '''Evaluates teams according to the given set of rules
-
-               tb is a derivative of a DataSet from tiebreakers, just the 'pct' columns,
-               transformed (teams in rows)
-
-               rules must be a list derived from tb_rules(), and must be a subset of the
-               columns in tb, in order of application
-
-               gm is an NFLGameMatrix (from NFL.wlt) used to compute h2h on the fly. It
-               should describe the same teams as in tb
             '''
 
             # NB that columns are assumed to arrive here unsorted, but we
@@ -1569,7 +1574,7 @@ class NFL():
                 elif rule == 'common-games' and len(divs) > 1:
                     # this flag is set to False if any team fails to meet the
                     # minimum number of required games
-                    if (self.opponents(teams, counts=True) < 4).any():
+                    if (self.opponents(teams, counts=True, season='reg') < 4).any():
                         continue
 
                 # ordinary rule processing

@@ -206,6 +206,32 @@ class NFLScenarioFrame(pd.DataFrame):
 
         return z.sum(axis=1)
 
+class NFLSeasonWrapper():
+    '''This class creates an context that changes the default season on
+       an NFL object. This makes it easier and safer to perform calculations
+       where the season must be hard-coded, for instance, calculating playoff
+       scenarios and tiebreakers.  It provides an alternative to always setting
+       the season parameter explicitly on function calls. Implementation looks like this:
+
+       nfl.season = 'post' # schedules, records, etc default to post-season
+       with NFLSeasonWrapper(nfl, 'reg'):
+          # nfl.season is now 'reg'
+
+       # nfl.season is back to post
+    '''
+
+    def __init__(self, nfl, season='reg'):
+        self.nfl = nfl
+        self.season = season
+
+    def __enter__(self):
+        self._season = self.nfl.season
+        self.nfl.season = self.season
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.nfl.season = self._season
+
+
 
 class NFLScenarioMaker():
     '''Facilitates generating and testing different win/lose/tie scenarios,
@@ -631,38 +657,39 @@ class NFLTiebreakerController(object):
         if type(teams) is set:
             teams = list(teams) 
 
-        if rule == 'head-to-head':
-            if df:
-                # Matrix doesn't give us accurate wlt tallies so we have to calculate
-               return self.nfl.wlt(teams, within=teams)
+        with NFLSeasonWrapper(self.nfl):
+            if rule == 'head-to-head':
+                if df:
+                    # Matrix doesn't give us accurate wlt tallies so we have to calculate
+                   return self.nfl.wlt(teams, within=teams)
 
-            gm = self.gamematrix(teams)
-            s = pd.Series(np.nan, index=gm.index)
-            for i in gm.index:
-                s[i] = gm.pct(i)
+                gm = self.gamematrix(teams)
+                s = pd.Series(np.nan, index=gm.index)
+                for i in gm.index:
+                    s[i] = gm.pct(i)
 
-            return result(s)
+                return result(s)
 
-        elif rule == 'common-games':
-            return result(self.nfl.wlt(teams, within=self.nfl.opponents(teams)))
+            elif rule == 'common-games':
+                return result(self.nfl.wlt(teams, within=self.nfl.opponents(teams)))
 
-        elif rule == 'common-netpoints':
-            s = self.nfl.wlt(teams, within=self.nfl.opponents(teams), points=True)
-            return result(s['scored'] - s['allowed'])
+            elif rule == 'common-netpoints':
+                s = self.nfl.wlt(teams, within=self.nfl.opponents(teams), points=True)
+                return result(s['scored'] - s['allowed'])
 
-        elif rule == 'overall-netpoints':
-            return result(stats.loc[teams, ('misc','pts-scored')] - stats.loc[teams, ('misc','pts-allowed')])
+            elif rule == 'overall-netpoints':
+                return result(stats.loc[teams, ('misc','pts-scored')] - stats.loc[teams, ('misc','pts-allowed')])
 
-        elif rule == 'conference-netpoints':
-            return result(stats.loc[teams, ('misc','conf-pts-scored')] - stats.loc[teams, ('misc','conf-pts-allowed')])
+            elif rule == 'conference-netpoints':
+                return result(stats.loc[teams, ('misc','conf-pts-scored')] - stats.loc[teams, ('misc','conf-pts-allowed')])
 
-        elif rule == 'net-touchdowns':
-            # TODO: implement team-level caching - this hits the API so it's super slow
-            return result(pd.Series(self.nfl.net_stats(teams)))
+            elif rule == 'net-touchdowns':
+                # TODO: implement team-level caching - this hits the API so it's super slow
+                return result(pd.Series(self.nfl.net_stats(teams)))
 
-        else:
-            col = lookup.get(rule, rule)
-            return result(stats.loc[teams, col])
+            else:
+                col = lookup.get(rule, rule)
+                return result(stats.loc[teams, col])
 
         
 
