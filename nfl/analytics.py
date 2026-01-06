@@ -1,7 +1,7 @@
 
 import pandas as pd
 import numpy as np
-from .utils import vmap, ivmap, is_listlike
+from .utils import vmap, ivmap, is_listlike, param_exc
 from .sequence import reorder, expand, expand_len, expand_width
 import math
 
@@ -572,7 +572,6 @@ class NFLTiebreakerController(object):
         self.cg = None
         self.tb_rules = {}
         self.tb_cache = {}
-        self.tb = None
         self.gm = None
         self.teams = list(nfl._list(teams))
 
@@ -607,46 +606,63 @@ class NFLTiebreakerController(object):
 
         return rules
 
-    def stat(self, rule, teams):
+    def stat(self, rule, teams, df=False):
         ''' Return statistics for a specified rule. This should be a Series indexed by team
         '''
 
         # rule/column mappings for when they differ
-        lookup = {'victory-strength': ('vic_stren','pct'), 'schedule-strength': ('sch_stren','pct'),
+        lookup = {'victory-strength': 'vic_stren', 'schedule-strength': 'sch_stren',
                     'conference-rank': ('misc', 'rank-conf'), 'overall-rank': ('misc','rank-overall')}
+
+        def result(obj):
+            if df:
+                if isinstance(obj, pd.Series):
+                    return pd.DataFrame({'win': np.nan, 'loss': np.nan, 'tie': np.nan, 'pct': obj}, index=obj.index, dtype='float32')
+
+                return obj
+
+            # just wants the pct column 
+            if isinstance(obj, pd.Series):
+                return obj
+
+            return obj['pct']
 
         stats = self.stats
         if type(teams) is set:
             teams = list(teams) 
 
         if rule == 'head-to-head':
+            if df:
+                # Matrix doesn't give us accurate wlt tallies so we have to calculate
+               return self.nfl.wlt(teams, within=teams)
+
             gm = self.gamematrix(teams)
             s = pd.Series(np.nan, index=gm.index)
             for i in gm.index:
                 s[i] = gm.pct(i)
 
-            return s
+            return result(s)
 
         elif rule == 'common-games':
-            return self.nfl.wlt(teams, within=self.nfl.opponents(teams), result='long')['pct']
+            return result(self.nfl.wlt(teams, within=self.nfl.opponents(teams)))
 
         elif rule == 'common-netpoints':
-            s = self.nfl.wlt(teams, within=self.nfl.opponents(teams), result='long')
-            return (s['scored'] - s['allowed'])
+            s = self.nfl.wlt(teams, within=self.nfl.opponents(teams), points=True)
+            return result(s['scored'] - s['allowed'])
 
         elif rule == 'overall-netpoints':
-            return stats.loc[teams, ('misc','pts-scored')] - stats.loc[teams, ('misc','pts-allowed')]
+            return result(stats.loc[teams, ('misc','pts-scored')] - stats.loc[teams, ('misc','pts-allowed')])
 
         elif rule == 'conference-netpoints':
-            return stats.loc[teams, ('misc','conf-pts-scored')] - stats.loc[teams, ('misc','conf-pts-allowed')]
+            return result(stats.loc[teams, ('misc','conf-pts-scored')] - stats.loc[teams, ('misc','conf-pts-allowed')])
 
         elif rule == 'net-touchdowns':
             # TODO: implement team-level caching - this hits the API so it's super slow
-            return pd.Series(self.nfl.net_stats(teams))
+            return result(pd.Series(self.nfl.net_stats(teams)))
 
         else:
-            col = lookup.get(rule, (rule,'pct'))
-            return stats.loc[teams, col]
+            col = lookup.get(rule, rule)
+            return result(stats.loc[teams, col])
 
         
 
@@ -662,15 +678,6 @@ class NFLTiebreakerController(object):
         else:
             return self.tb_cache.get(k, (None,None))
 
-    def tiebreakers(self):
-        '''Return a tiebreaker DataFrame for the object's teams, ideally from cache
-        '''
-
-        if self.tb is None:
-            self.tb = self.nfl.tiebreakers(self.teams, strict=False, controller=self).xs('pct', axis=1, level=1).T
-
-        return self.tb
-
     def gamematrix(self, teams):
         '''Return an NFLGameMatridx for the specified teams, ideally from cache
         '''
@@ -684,38 +691,28 @@ class NFLTiebreakerController(object):
         return self.gm.loc[teams, teams]
 
 
-    def rules(self, teams):
+    def rules(self, teams, all=False):
         '''Return tiebreaker rules for the given teams, in hierarchical order
            teams may also be a keyword, 'div' or 'conf'
         '''
         if type(teams) is str:
-            k = 'div' if teams == 'div' else 'conf'
-        else:
-            k = 'div' if len(set( map(lambda x: self.nfl.teams_[x]['div'], teams) )) == 1 else 'conf'
+            if teams in self.tb_rules:
+                return self.tb_rules[teams]
 
+            raise param_exc('teams', teams)
+
+        k = 'div' if len(set( map(lambda x: self.nfl.teams_[x]['div'], teams) )) == 1 else 'conf'
+
+        if all:
+            # return all rules but with order and priority dicated by teams
+            (a,b) = (self.rules('div'), self.rules('conf'))
+            if k == 'conf':
+                (a,b) = (b,a)
+
+            return a + list(set(b) - set(a))
+
+        # else, return rules that match the teams
         return self.tb_rules[k]
-
-    def common_games(self, teams):
-        ''' Return the wlt DataFrame for the given teams against their common
-            opponents
-        '''
-
-        t = teams.copy()
-        t.sort()
-        k = ':'.join(t)
-
-        if self.cg is not None and k in self.cg.get_level_values(0):
-            return self.cg.xs(k)
-        
-        s = self.nfl.wlt(teams, within=self.nfl.opponents(teams), result='long')
-        s = s.assign(key=k).set_index('key', append=True).swaplevel()
-        if self.cg is None:
-            self.cg = s
-        else:
-            self.cg = pd.concat([self.cg, s])
-
-        return self.cg.xs(k)
-
 
 class NFLSequenceMaker():
 

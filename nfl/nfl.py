@@ -7,7 +7,7 @@ from time import time
 import numpy as np
 import pandas as pd
 
-from .utils import current_season, vmap, ivmap, set_dtypes, stack_copy
+from .utils import current_season, vmap, ivmap, set_dtypes, stack_copy, param_exc
 from .analytics import NFLTeamMatrix, NFLGameMatrix, NFLScenario, NFLScenarioMaker, NFLTiebreakerController, NFLTiebreakerError
 from .__version__ import __version__
 
@@ -1089,15 +1089,14 @@ class NFL():
         return df
 
 
-    def opponents(self, teams, weeks=None, allGames=False, result='set', season=None):
+    def opponents(self, teams, weeks=None, allGames=False, counts=False, season=None):
         ''' Returns the set of common opponents of one or more teams
 
             The teams argument can be a single team or a list.
 
-            If result == 'set' the function returns a set of opponent team codes
-
-            If result == 'games' the function returns a Series of number of games played
-            against common opponents, indexed by team
+            If counts is True the function returns a Series of number of games played
+            against common opponents, indexed by team. If False then a set of
+            common opponents is returned
         '''
 
         if teams is None:
@@ -1117,10 +1116,13 @@ class NFL():
 
         opps = set.intersection( *g.groupby('team')['opp'].unique().apply(lambda x: set(x)) )
 
-        if result == 'set':
-            return opps
-        elif result == 'games':
-            return g[g['opp'].isin(opps)].groupby('team')['week'].count()
+        if counts:
+            if len(opps):
+                return g[g['opp'].isin(opps)].groupby('team')['week'].count()
+            else:
+                return pd.Series(0, index=teams)
+
+        return opps
 
 
     def roster(self, team):
@@ -1255,7 +1257,7 @@ class NFL():
 
         return tds
 
-    def wlt(self, teams=None, within=None, weeks=None, season=None, result='short'):
+    def wlt(self, teams=None, within=None, weeks=None, season=None, points=False):
         '''Return the wlt stats of one or more teams
 
         teams:  team code or list of team codes
@@ -1266,7 +1268,7 @@ class NFL():
 
         season: override default season
 
-        result: 'long' will also include aggregate points scored and allowed
+        points: include point columns
         '''
 
         teams  = self._list(teams)
@@ -1302,7 +1304,7 @@ class NFL():
 
         df['pct'] = ((df['win'] + df['tie']*0.5) / df[['win','loss','tie']].sum(axis=1)).astype('float32')
 
-        if result == 'long':
+        if points:
             return df
 
         return df.drop(columns=['scored','allowed'])
@@ -1367,22 +1369,20 @@ class NFL():
     def tiebreakers(self, teams, strict=True, controller=None):
         '''Return tiebreaker analysis for specified teams
 
-           teams           a list-like of team codes
+           teams        A list-like of team codes
 
-           strict          If True, the function calculates head-to-head and common-game statistics,
-                           and returns only the rules that apply to the specified teams in order of
-                           precedence. The function will also perform sanity checks to ensure that
-                           necessary conditions are met, and if not sets the 'perc' fields to inf
-                           (refer to the necessary conditions for 3-team wildcard tiebreakers).
-                           If False, then none of this is done, all possible rules are returned, in
-                           an order that doesn't necessarily match the set of teams
+           strict       If True, the function returns only the rules that apply to the specified
+                        teams in order of precedence. The function will also perform sanity checks
+                        to ensure that necessary conditions are met, and if not sets the 'perc' fields
+                        to inf as described below. If False, then no sanity chekcs are applied,
+                        and all rules are returned with the irrelevant rules appended to the end.
 
-           controller      A variation of NFLTiebreakerController. Pass None to use the default class
+           controller   A variation of NFLTiebreakerController. Pass None to use the default class
 
         Each row in the returned dataframe is the results of a step in the NFL's tiebreaker procedure
         currently defined here: https://www.nfl.com/standings/tie-breaking-procedures
 
-        rank (conference or overall) statistics are always in increasing order, e.g. 1 is the worst
+        rank (conference or overall) statistics are always in increasing order, i.e. 1 is the worst
         ranked team
 
         An occurrence of 'inf' as a value indicates that comparisons are not valid for that rule
@@ -1399,70 +1399,37 @@ class NFL():
         z = z.xs('pct', level=1, axis=1).sort_values(list(z.index), axis=1, ascending=False)
         '''
 
+        teams = self._list(teams)
+        if teams is None:
+            teams = self.teams_.keys()
+
         if controller is None:
             controller = NFLTiebreakerController(self, teams)
 
-        teams = self._list(teams)
-        # we'll prioritize rules later: for now, these can be in any order
-        rules = ['overall', 'head-to-head', 'division', 'conference', 'common-games',
-            'victory-strength', 'schedule-strength', 'conference-rank', 'overall-rank',
-            'common-netpoints', 'conference-netpoints', 'overall-netpoints', 'net-touchdowns']
         columns = pd.MultiIndex.from_product([teams, ['win','loss','tie', 'pct']], names=['team','outcome'])
-        df = pd.DataFrame(np.nan, index=rules, columns=columns, dtype='float32')
+        df = pd.DataFrame(columns=columns, dtype='float32')
+        df.index.name = 'rule'
 
-        stats = self._stats()
-        if self.netTouchdowns:
-            ntd = self.net_stats(teams)
-        else:
-            ntd = {}
+        rules = controller.rules(teams, all=(strict==False))
+
+        for rule in rules:
+            s = controller.stat(rule, teams, df=True)
+            df.loc[rule] = s.unstack().reorder_levels((1,0))
 
         if strict:
-            h2h = self.wlt(teams, within=teams, season='reg', result='long')
-            gm  = self.matrix(teams)
-            co  = self.wlt(teams, within=self.opponents(teams), season='reg', result='long')
-
-        for team in teams:
-            df.loc['overall', team] = stats.loc[team,'overall'].values
-            if strict:
-                df.loc['head-to-head', team] = h2h.loc[team].drop(['scored', 'allowed']).values
-                df.loc['common-games', team] = co.loc[team].drop(['scored','allowed']).values
-                df.loc['common-netpoints', (team,'pct')] = co.loc[team, 'scored'] - co.loc[team, 'allowed']
-
-            df.loc['conference', team] = stats.loc[team,'conference'].values
-            df.loc['victory-strength', team] = stats.loc[team,'vic_stren'].values
-            df.loc['schedule-strength', team] = stats.loc[team,'sch_stren'].values
-            df.loc['division', team] = stats.loc[team,'division'].values
-
-            df.loc['conference-rank', (team,'pct')] = stats.loc[team, ('misc', 'rank-conf')]
-            df.loc['overall-rank', (team,'pct')] = stats.loc[team, ('misc', 'rank-overall')]
-
-            df.loc['conference-netpoints', (team,'pct')] = stats.loc[team, ('misc', 'conf-pts-scored')] - stats.loc[team, ('misc', 'conf-pts-allowed')]
-            df.loc['overall-netpoints', (team,'pct')] = stats.loc[team, ('misc', 'pts-scored')] - stats.loc[team, ('misc', 'pts-allowed')]
-
-            if self.netTouchdowns:
-                df.loc['net-touchdowns', (team,'pct')] = ntd.get(team, np.nan)
-
-            # sanity checks: we use inf to indicate that the column should be ignored
-            if strict and not gm.same():
-                # all teams must have played each other the same number of games or h2h is invalid
-                df.loc['head-to-head', (team,'pct')] = np.inf
-
-
-        # team-wide sanity checks
-        if strict:
+            # sanity checks
             divs = set( map(lambda x: self.teams_[x]['div'], teams) )
 
-            if len(divs) > 1 and (df.loc['common-games'].drop('pct', level=1).groupby('team').sum() < 4).any():
-                # if any team plays less than 4 common games, all common-team record scores are invalid
-                df.loc['common-games'].loc[:, 'pct'] = np.inf
+            gm = self.matrix(teams)
+            # For head-to-head to be valid: 1) all teams must have played the
+            # same number of games against each other, and 2) for wildcards, there
+            # must be a "clean sweep" winner or loser, else the rule is invalid
+            if not gm.same() or (len(divs) > 1 and len(teams) > 2 and gm.sweep()[0] is None):
+                df.loc['head-to-head', (slice(None), 'pct')] = np.inf
 
-            
-            if len(divs) > 1 and len(teams) > 2 and gm.sweep()[0] is None:
-                # in conference tiebreakers with 3+ teams, head-to-head matchups across divisions
-                # must have a "sweep" winner or loser
-                df.loc['head-to-head'].loc[:, 'pct'] = np.inf
-
-            return df.loc[controller.rules(teams)]
+            # there must be at least 4 games for the common-games wildcard tiebreaker
+            if len(divs) > 1 and (self.opponents(teams, counts=True) < 4).any():
+                df.loc['common-games', (slice(None), 'pct')] = np.inf
 
         return df
 
@@ -1578,30 +1545,38 @@ class NFL():
                 # it can fall through to the code below. Otherwise, include a
                 # continue statement to ignore the rule and move to the next one
 
-                if rule == 'head-to-head' and len(divs) > 1 and len(teams) > 2:
-                    # special case for ties amongst 3+ teams across divisions
-                    (sweeper,s) = controller.gamematrix().submatrix(teams).sweep()
-                    if s == 1:
-                        if isLog: msg(depth, 'sweep in', rule=rule, target=sweeper, pool=teams)
-                        return (sweeper, rule)
+                if rule == 'head-to-head':
+                    gm = controller.gamematrix(teams)
+                    if len(divs) > 1 and len(teams) > 2:
+                        # special case for ties amongst 3+ teams across divisions
+                        (sweeper,s) = gm.sweep()
+                        if s == 1:
+                            if isLog: msg(depth, 'sweep in', rule=rule, target=sweeper, pool=teams)
+                            return (sweeper, rule)
 
-                    elif s == 0:
-                        # Drop the losing team and restart with the remainders
-                        keepers = teams - {sweeper}
-                        if isLog: msg(depth, 'sweep out', rule=rule, target=sweeper, pool=teams)
-                        return test(controller.rules(keepers), keepers, divRule, depth+1)
+                        elif s == 0:
+                            # Drop the losing team and restart with the remainders
+                            keepers = teams - {sweeper}
+                            if isLog: msg(depth, 'sweep out', rule=rule, target=sweeper, pool=teams)
+                            return test(controller.rules(keepers), keepers, divRule, depth+1)
 
-                    else:
+                        else:
+                            continue
+
+                    elif not gm.same():
                         continue
 
                 elif rule == 'common-games' and len(divs) > 1:
                     # this flag is set to False if any team fails to meet the
                     # minimum number of required games
-                    if (self.opponents(teams, result='games') < 4).any():
+                    if (self.opponents(teams, counts=True) < 4).any():
                         continue
 
-                # count the teams that tie for this rule - teams should be sorted by now
+                # ordinary rule processing
+                # get the rule statistics and sort
                 r = controller.stat(rule, teams).sort_values(ascending=False)
+
+                # count how many teams are tied for first
                 k = len( r[r==r.iloc[0]] )
                 if k == 1:
                     if isLog: msg(depth, 'select', target=r.index[0], pool=r.index, rule=rule)

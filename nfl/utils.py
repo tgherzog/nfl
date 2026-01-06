@@ -43,6 +43,8 @@ ivmap_ = {'win': 1, 'loss': 0, 'tie': -1}
 def ivmap(v):
     return ivmap_.get(v, v)
 
+def param_exc(k,v):
+    return ValueError('Unrecognized value or type for {} ({})'.format(k,v))
 
 def set_dtypes(df, fields):
     '''Set dtypes for DataFrame columns
