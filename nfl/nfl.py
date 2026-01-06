@@ -803,14 +803,11 @@ class NFL():
         # First argument can also be a series of scores or outcomes. Index must be a MultiIndex (week,team)
         if isinstance(ref, NFLScenario):
             c = ['as', 'hs', 'p']
-            for k,v in ref.items():
-                if v == 'win':
-                    self.games_.loc[k, c] = [0, 1, True]
-                elif v == 'loss':
-                    self.games_.loc[k, c] = [1, 0, True]
-                elif v == 'tie':
-                    self.games_.loc[k, c] = [0, 0, True]
-
+            # need to cast to int16 so pandas doesn't complain
+            np0 = np.int16(0)
+            np1 = np.int16(1)
+            vmap = {'win': [np0, np1, True], 'loss': [np1, np0, True], 'tie': [np0, np0, True]}
+            self.games_.loc[ref.index, c] = [vmap[k] for k in ref.values]
             self._dirty()
             return
 

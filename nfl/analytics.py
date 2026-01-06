@@ -14,9 +14,16 @@ class NFLScenario(pd.Series):
        games database
     '''
 
-    def __init__(self, host, data, index, name=None):
-        super().__init__(data, index=index, name=name, dtype=str)
-        self.host = host
+    _metadata = ['host']
+
+    @staticmethod
+    def from_generator(host, data, index, name=None):
+        '''Returns an NFLScenario from generator data
+        '''
+
+        s = NFLScenario(data, index=index, name=name, dtype=str)
+        s.host = host
+        return s
 
     def weeks(self, team):
         '''Return a Series of outcomes for the specified team, one row per week
@@ -321,7 +328,7 @@ class NFLScenarioMaker():
                 for elem in x:
                     yield z + [elem]
 
-        s = NFLScenario(self, 0, index=self.games.index, name='outcome')
+        s = NFLScenario.from_generator(self, 0, index=self.games.index, name='outcome')
         values = ('win','loss','tie')
         if not self.ties:
             values = values[:-1]
@@ -329,7 +336,6 @@ class NFLScenarioMaker():
         for row in outcomes([values] * len(self.games)):
             s[:] = row
             yield s
-            # yield NFLScenario(self, row, index=self.games.index)
 
     def frame(self, extra=[]):
         '''Return a DataFrame structured to hold the set of scenarios. Typically
