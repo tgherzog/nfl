@@ -1593,8 +1593,7 @@ class NFL():
                 # otherwise, everyone ties, so proceed to the next rule
 
             # if we get this far, we've run out of rules, and remaining teams are a tie
-            # TODO: implement indicators of more specific reasons for a tie
-            raise NFLTiebreakerError("Can't resolve tiebreakers for {}".format(','.join(teams)))
+            raise NFLTiebreakerError("Can't resolve tiebreakers with the given rules", teams, rules[-1])
 
 
         # Assess overall record at the top level to avoid heavy computes if possible
