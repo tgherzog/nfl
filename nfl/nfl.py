@@ -1098,10 +1098,17 @@ class NFL():
         return df
 
 
-    def opponents(self, teams, weeks=None, allGames=False, counts=False, season=None):
+    def opponents(self, teams, weeks=None, allGames=False, op='and', counts=False, season=None):
         ''' Returns the set of common opponents of one or more teams
 
             The teams argument can be a single team or a list.
+
+            op can be one of ['and','or']. 'and' is the normal operation and returns
+            the set of common opponents, i.e. the intersection of the teams' opponents.
+            'or' returns the union of teams' opponents, less the teams themselves.
+            This is sometimes useful for determining which teams could materially impact
+            the prospects of a set of teams, for instance, if a tiebreaker comes down
+            to strength of victory or strength of schedule.
 
             If counts is True the function returns a Series of number of games played
             against common opponents, indexed by team. If False then a set of
@@ -1123,7 +1130,13 @@ class NFL():
 
         g = g[i]
         if len(g) > 0:
-            opps = set.intersection( *g.groupby('team')['opp'].unique().apply(lambda x: set(x)) )
+            g2 = g.groupby('team')['opp'].unique().apply(lambda x: set(x))
+            if op == 'and':
+                opps = set.intersection( *g2 )
+            elif op == 'or':
+                opps = set.union( *g2 ) - set(teams)
+            else:
+                raise param_exc('counts', counts)
         else:
             opps = set()
 
@@ -1596,8 +1609,13 @@ class NFL():
             raise NFLTiebreakerError("Can't resolve tiebreakers with the given rules", teams, rules[-1])
 
 
-        # Assess overall record at the top level to avoid heavy computes if possible
-        overall = controller.stat('overall', list(teams))
+        # Get overall stats as efficiently as possible; defer a stats rebuild until we really need it
+        if self.stats is None:
+            overall = self.wlt(teams)
+        else:
+            overall = self.stats.loc[list(teams), 'overall']
+
+        overall = overall['pct']
 
         while len(teams) > 1:
             if len(r) >= limit:

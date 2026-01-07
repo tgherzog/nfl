@@ -623,13 +623,11 @@ class NFLTiebreakerController(object):
         self.tb_rules = {}
         self.tb_cache = {}
         self.gm = None
+        self.stats = None # for efficiency, don't allocate this until first stat call
         self.teams = list(nfl._list(teams))
 
         for i in ('div','conf'):
             self.tb_rules[i] = self.get_rules(i)
-
-        stats = nfl._stats()
-        self.stats = stats.loc[self.teams]
 
     def get_rules(self, n):
         '''Return the rule list for category n (div|conv)
@@ -678,6 +676,10 @@ class NFLTiebreakerController(object):
             return obj['pct']
 
         stats = self.stats
+        if stats is None:
+            stats = self.nfl._stats().loc[self.teams]
+            self.stats = stats
+
         if type(teams) is set:
             teams = list(teams) 
 
