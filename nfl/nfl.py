@@ -1829,7 +1829,7 @@ class NFL():
 
             c = set(conf_teams[k] for k in teams)
             if len(c) > 1:
-                raise ValueError('Teams must all belong to the same conference')
+                raise NFLScenarioError('Teams must all belong to the same conference')
 
             conf = NFLConference(list(c)[0], self)
 
