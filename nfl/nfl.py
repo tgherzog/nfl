@@ -199,7 +199,7 @@ class NFLConference():
         return z
 
 
-    def playoffs(self, count=7):
+    def playoffs(self, count=7, controller=None):
         '''Current conference seeds, in order
 
            count     number of seeds to return
@@ -210,11 +210,12 @@ class NFLConference():
 
         # restructure and reorder by seed
         champs = pd.Series(map(lambda x: x.split('-')[-1], champs.index), index=champs)
-        champs = champs.reindex(self.host.tiebreaks(champs.index).index)
+        champs = champs.reindex(self.host.tiebreaks(champs.index, controller=controller).index)
 
         # append all remaining teams in tiebreaker order
+        # TODO: this could run faster by eliminating teams with ineligible records
         if count > len(champs):
-            champs = pd.concat([champs, pd.Series('', index=self.host.tiebreaks(self.teams-set(champs.index), limit=count-len(champs)).index)])
+            champs = pd.concat([champs, pd.Series('', index=self.host.tiebreaks(self.teams-set(champs.index), limit=count-len(champs), controller=controller).index)])
             i = 1
             for elem in champs[4:7].index:
                 champs[elem] = 'Wildcard{}'.format(i)
@@ -355,8 +356,14 @@ class NFL():
     def dgames(self, allGames=False, season=None):
         '''Returns a game*2 variant of the games dataframe for the specified season.
            The result consists of 2 rows for every completed game with the teams and outcomes
-           reversed in the 2nd row. This is only used in stats computations at this
-           point, but might be useful down the road
+           reversed in the 2nd half of the table. This is mostly used internally
+           by other class functions.
+
+           For speed, the function caches the result of season='reg', allGames=False
+           since this is the most common call
+
+           allGames means the same thing as in the more public facing functions. Pass
+           None to return unplayed games
         '''
 
         season = season or self.season
@@ -368,6 +375,8 @@ class NFL():
         rs = self.games_.xs(season)
         if allGames == False:
             rs = rs[rs['p']]
+        elif allGames is None:
+            rs = rs[rs['p']==False]
 
         rs = rs[['wk', 'at', 'ht', 'as', 'hs']].rename(columns={'wk': 'week'})
 
@@ -1103,6 +1112,9 @@ class NFL():
 
             The teams argument can be a single team or a list.
 
+            allGames specifies if all games should be included or just finished games. Pass
+            None to specify unplayed games
+
             op can be one of ['and','or']. 'and' is the normal operation and returns
             the set of common opponents, i.e. the intersection of the teams' opponents.
             'or' returns the union of teams' opponents, less the teams themselves.
@@ -1113,6 +1125,18 @@ class NFL():
             If counts is True the function returns a Series of number of games played
             against common opponents, indexed by team. If False then a set of
             common opponents is returned
+
+            Examples:
+
+            # set of common opponents for NFC-North teams
+            nfl.opponents('NFC-North')
+
+            # determine if teams meet the 'minimum of 4' qualifier for common game tiebreakers
+            (nfl.opponents(teams, counts=True) >= 4).all()
+
+            # set of teams which may impact the outcome of these teams if tiebreakers
+            # go down to 'strength of victory'
+            nfl.opponents(teams, op='or', allGames=None)
         '''
 
         if teams is None:
@@ -1776,10 +1800,10 @@ class NFL():
         # single team code or integer
         return [teams]
 
-    def scenarios(self, teams, weeks, spots=1, ties=True, wrapper=None, wrapper_args={}):
+    def scenarios(self, teams, weeks, spots=1, ties=True, limit='victory-strength', errors='raise', wrapper=None, wrapper_args={}):
         '''Returns a dataframe of scenarios and outcomes with the specified constraints
 
-           This function is essentially a wrapper for NFLScenarioMaker with
+           This method is essentially a wrapper for NFLScenarioMaker with
            the most common use cases, i.e. determining playoff spots. You
            can customize and optimize the model by implementing NFLScenarioMaker
            directly (see docs).
@@ -1800,12 +1824,26 @@ class NFL():
 
            ties     whether to include ties as possible outcomes
 
-           wrapper  A class used to wrap the scenario iterator. This is typically
-                    used to implement progress bars. If the class includes an 'update'
-                    function it is called after each scenario iteration, in the manner
-                    of the tqdm package
+           limit    limit (stop) tiebreaker analysis just before the specified rule. The
+                    'win/loss/tie' approach in NFLScenarioMaker doesn't model the impact
+                    of point spreads, required by the "net points" rules, nor the impact
+                    of games outside the scenario scope, required by the "strength of
+                    victory/schedule" rules. If the tiebreaker method runs out of
+                    rules it will raise an NFLTiebreakerError exception. limit can also
+                    be None to employ all applicable rules.
 
-           wrapper_args Additionaal arguments to instantiate the wrapper
+                    You can legimiately extend the limit by including additional teams
+                    in the scenario (use NFL.opponents to determine which teams might
+                    be relevant) or by stipulating outcomes prior to calling scenarios using
+                    the set method. The former will increase run time exponentially.
+
+           errors   'raise', 'ignore' or 'log'. 'log' will record tiebreaker exceptions in the
+                    resulting dataframe. This only affects handling of tiebreaker exceptions
+
+           wrapper  A class used to wrap the scenario iterator. This is typically
+                    used to implement progress bars, such as with tqdm
+
+           wrapper_args Additional arguments to instantiate the wrapper
 
            The resulting DataFrame will have 3**games rows, each row representing a unique
            scenario and outcome, where rows is the number of games played collectively by teams in the
@@ -1851,24 +1889,44 @@ class NFL():
 
             conf = NFLConference(list(c)[0], self)
 
+        if errors not in ['raise', 'ignore', 'log']:
+            raise param_exc('errors', errors)
+
         if wrapper is None:
             wrapper = NFLEmptyContextWrapper
+
+        ctrl = NFLTiebreakerController(self, teams)
+        ctrl.limit(limit)
         
         with NFLScenarioMaker(self, teams, weeks, ties) as gen, wrapper(gen, **wrapper_args) as wgen:
             df = gen.frame(['outcome'])
+            exceptions = pd.Series()
             for option in wgen:
                 x = len(df)
                 df.loc[x] = option.to_frame()
                 df.loc[x, 'outcome'] = False
                 self.set(option, season='reg')
-                if spots == 0:
-                    p = conf.playoffs()
-                    z = [('outcome',i) for i in set(teams) & set(p.index)]
-                    df.loc[x, z] = True
-                else:
-                    tb = self.tiebreaks(teams, limit=spots)
-                    z = [('outcome',i) for i in tb.index[:spots]]
-                    df.loc[x, z] = True
+                ctrl.reset()
+                try:
+                    if spots == 0:
+                        p = conf.playoffs(controller=ctrl)
+                        z = [('outcome',i) for i in set(teams) & set(p.index)]
+                        df.loc[x, z] = True
+                    else:
+                        tb = self.tiebreaks(teams, limit=spots, controller=ctrl)
+                        z = [('outcome',i) for i in tb.index[:spots]]
+                        df.loc[x, z] = True
+
+                except NFLTiebreakerError as err:
+                    if errors == 'ignore':
+                        df.drop(x, inplace=True)
+                    elif errors == 'log':
+                        exceptions[x] = ','.join(err.teams)
+                    else:
+                        raise
+
+            if len(exceptions):
+                return df.join(exceptions.rename(('outcome','exc_log')))
 
             return df
 

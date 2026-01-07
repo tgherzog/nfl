@@ -619,15 +619,21 @@ class NFLTiebreakerController(object):
 
     def __init__(self, nfl, teams):
         self.nfl = nfl
-        self.cg = None
         self.tb_rules = {}
-        self.tb_cache = {}
-        self.gm = None
-        self.stats = None # for efficiency, don't allocate this until first stat call
         self.teams = list(nfl._list(teams))
+
+        self.reset() # initialize cache properties
 
         for i in ('div','conf'):
             self.tb_rules[i] = self.get_rules(i)
+
+    def reset(self):
+        '''Reset any and all internal caches
+        '''
+
+        self.tb_cache = {}
+        self.stats = None
+        self.gm = None
 
     def get_rules(self, n):
         '''Return the rule list for category n (div|conv)
@@ -743,6 +749,19 @@ class NFLTiebreakerController(object):
 
         return self.gm.loc[teams, teams]
 
+    def limit(self, rule):
+        '''Delete all rules starting with the one specified. This is typically used
+           to skip rules that can't be evaluated in the current context (e.g. 
+           win/loss scenarios), which increases the chances of raising a
+           NFLTiebreakerError exception
+        '''
+
+        if rule is None:
+            return
+
+        for k,v in self.tb_rules.items():
+            if rule in v:
+                self.tb_rules[k] = v[:v.index(rule)]
 
     def rules(self, teams, all=False):
         '''Return tiebreaker rules for the given teams, in hierarchical order
