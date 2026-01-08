@@ -3,7 +3,7 @@ import sys
 import logging
 import copy
 from datetime import datetime
-from time import time
+from time import perf_counter as pc
 import numpy as np
 import pandas as pd
 
@@ -202,11 +202,28 @@ class NFLConference():
     def playoffs(self, count=7, controller=None):
         '''Current conference seeds, in order
 
-           count     number of seeds to return
+           count        number of seeds to return
+
+           controller   an NFLTiebreakerController instance, or None
+                        to use the default class. If you create your
+                        own controller, note that you *must*
+                        instantiate this class with all conference teams,
+                        regardless of which ones you are testing
         '''
 
         # get top-listed teams from each division
-        champs = self.standings.reset_index().groupby(('div','')).first()['team']
+        champs = None
+        if self.host.stats is None:
+            # we might be able to avoid running stats
+            t = pd.DataFrame.from_dict(self.host.teams_, orient='index')['div']
+
+            # select the single largest team from each division, or more than 1 if there's a tie
+            x = self.host.wlt(self.teams).assign(div=t).groupby('div')['pct'].nlargest(1, keep='all')
+            if len(x) == len(t.loc[list(self.teams)].unique()):
+                champs = pd.Series(x.index.get_level_values(1), index=x.index.get_level_values(0))
+
+        if champs is None:
+            champs = self.standings.reset_index().groupby(('div','')).first()['team']
 
         # restructure and reorder by seed
         champs = pd.Series(map(lambda x: x.split('-')[-1], champs.index), index=champs)
@@ -218,8 +235,8 @@ class NFLConference():
 
             # limit to teams that have an eligible overall record
             # this only saves time in certain situations, but it can't hurt
-            z = self.standings.loc[list(teams), ('overall','pct')].sort_values(ascending=False)
-            teams = z[z >= z.iloc[count-len(champs)-1]].index
+            # z = self.standings.loc[list(teams), ('overall','pct')].sort_values(ascending=False)
+            # teams = z[z >= z.iloc[count-len(champs)-1]].index
 
             others = self.host.tiebreaks(teams, limit=count-len(champs), controller=controller)
             champs = pd.concat([champs, pd.Series('', index=others.index)])
@@ -293,6 +310,7 @@ class NFL():
         self.autoUpdate = True
         self.netTouchdowns = False
         self.display = display
+        self.debug = False
 
         if not self.year:
             self.year = current_season()
@@ -1896,32 +1914,36 @@ class NFL():
            nfl.scenarios('AFC', [17, 18], spots=0)
         '''
 
-        teams = self._list(teams)
-        if spots == 0:
-            # ascertain the conference with sanity check
-            conf_teams = {}
-            for k,v in self.confs_.items():
-                for elem in v:
-                    conf_teams[elem] = k
-
-            c = set(conf_teams[k] for k in teams)
-            if len(c) > 1:
-                raise NFLScenarioError('Teams must all belong to the same conference')
-
-            conf = NFLConference(list(c)[0], self)
-
         if errors not in ['raise', 'ignore', 'log']:
             raise param_exc('errors', errors)
 
+        teams = self._list(teams)
+        if spots == 0:
+            error = NFLScenarioError('Teams must all belong to the same conference')
+            if teams is None:
+                raise error
+
+            t = pd.DataFrame.from_dict(self.teams_, orient='index')
+            if len( t.loc[list(teams), 'conf'].unique() ) > 1:
+                raise error
+
+            conf = NFLConference(t.iloc[0]['conf'], self)
+            ctrl = NFLTiebreakerController(self, conf.teams)
+        else:
+            ctrl = NFLTiebreakerController(self, teams)
+
+        ctrl.limit(limit)
+
         if wrapper is None:
             wrapper = NFLEmptyContextWrapper
-
-        ctrl = NFLTiebreakerController(self, teams)
-        ctrl.limit(limit)
         
         with NFLScenarioMaker(self, teams, weeks, ties) as gen, wrapper(gen, **wrapper_args) as wgen:
             df = gen.frame(['outcome'])
             exceptions = pd.Series()
+            if self.debug:
+                df[('debug','tm')] = np.float32(0)
+                df[('debug','cache')] = False
+
             for option in wgen:
                 x = len(df)
                 df.loc[x] = option.to_frame()
@@ -1929,6 +1951,7 @@ class NFL():
                 self.set(option, season='reg')
                 ctrl.reset()
                 try:
+                    st = pc()
                     if spots == 0:
                         p = conf.playoffs(controller=ctrl)
                         z = [('outcome',i) for i in set(teams) & set(p.index)]
@@ -1937,6 +1960,10 @@ class NFL():
                         tb = self.tiebreaks(teams, limit=spots, controller=ctrl)
                         z = [('outcome',i) for i in tb.index[:spots]]
                         df.loc[x, z] = True
+
+                    if self.debug:
+                        df.loc[x, ('debug','tm')] = pc()-st
+                        df.loc[x, ('debug','cache')] = self.stats is None
 
                 except NFLTiebreakerError as err:
                     if errors == 'ignore':
