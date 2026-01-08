@@ -1834,7 +1834,7 @@ class NFL():
         # single team code or integer
         return [teams]
 
-    def scenarios(self, teams, weeks, spots=1, ties=True, limit=None, errors='raise', wrapper=None, wrapper_args={}):
+    def scenarios(self, teams, weeks, spots=1, ties=True, limit='victory-strength', errors='raise', wrapper=None, wrapper_args={}):
         '''Returns a dataframe of scenarios and outcomes with the specified constraints
 
            This method is essentially a wrapper for NFLScenarioMaker with
@@ -1923,9 +1923,9 @@ class NFL():
                 raise error
 
             conf = NFLConference(t.iloc[0]['conf'], self)
-            ctrl = NFLTiebreakerController(self, conf.teams, limit)
+            ctrl = NFLTiebreakerController(self, conf.teams, limit=limit)
         else:
-            ctrl = NFLTiebreakerController(self, teams, limit)
+            ctrl = NFLTiebreakerController(self, teams, limit=limit)
 
         if wrapper is None:
             wrapper = NFLEmptyContextWrapper
