@@ -213,9 +213,17 @@ class NFLConference():
         champs = champs.reindex(self.host.tiebreaks(champs.index, controller=controller).index)
 
         # append all remaining teams in tiebreaker order
-        # TODO: this could run faster by eliminating teams with ineligible records
         if count > len(champs):
-            champs = pd.concat([champs, pd.Series('', index=self.host.tiebreaks(self.teams-set(champs.index), limit=count-len(champs), controller=controller).index)])
+            teams = self.teams - set(champs.index)
+
+            # limit to teams that have an eligible overall record
+            # this only saves time in certain situations, but it can't hurt
+            z = self.standings.loc[list(teams), ('overall','pct')].sort_values(ascending=False)
+            teams = z[z >= z.iloc[count-len(champs)-1]].index
+
+            others = self.host.tiebreaks(teams, limit=count-len(champs), controller=controller)
+            champs = pd.concat([champs, pd.Series('', index=others.index)])
+
             i = 1
             for elem in champs[4:7].index:
                 champs[elem] = 'Wildcard{}'.format(i)
@@ -431,9 +439,12 @@ class NFL():
         stats = pd.DataFrame(columns=pd.MultiIndex.from_tuples(stat_cols))
         stats.index.name = 'team'
 
-        for k,team in self.teams_.items():
-            stats.loc[k, ['name', 'div', 'conf']] = (team['name'], team['div'], team['conf'])
-            stats.loc[k, ['overall','division','conference', 'vic_stren', 'sch_stren', 'misc']] = 0
+        z = pd.DataFrame.from_dict(self.teams_, orient='index').drop(columns='short')
+
+        # next line converts to a compatible multi-index
+        z = z.set_axis(pd.MultiIndex.from_product([[''], z.columns]), axis=1).swaplevel(axis=1)
+        stats[z.columns] = z
+        stats[['overall','division','conference', 'vic_stren', 'sch_stren', 'misc']] = 0
 
         # special dataframe of game info to streamline processing. Contains 2 rows per game for
         # outcomes from each team's perspective.
@@ -473,7 +484,7 @@ class NFL():
         # 0 fill all NaNs - this needs to be done to compute percents
         stats.iloc[:, 3:] = stats.iloc[:, 3:].fillna(0)
 
-        # compute pct columns - the Nan substitution below prevents potential div/0 errors (if a team hasn't played any games) 
+        # compute pct columns - the Nan substitution below prevents potential div/0 errors
         for i in ['overall','division','conference', 'sch_stren', 'vic_stren']:
             stats[(i,'pct')] = (stats[(i,'win')] + stats[(i,'tie')]*0.5) / stats[i].sum(axis=1).replace({0: np.nan})
 
@@ -492,7 +503,7 @@ class NFL():
         s = pd.Series(index=stats.index)
         controller = NFLTiebreakerController(self, stats.index)
         for div in stats['div'].unique():
-            z = self.tiebreaks(self.divs_[div], divRule=False, controller=controller)
+            z = self.tiebreaks(self.divs_[div], divRule=False, controller=controller, errors=False)
             z[:] = range(len(z))
             s.loc[z.index] = z.astype(s.dtype)
 
@@ -1483,7 +1494,7 @@ class NFL():
         return df
 
 
-    def tiebreaks(self, teams, limit=None, divRule=True, controller=None):
+    def tiebreaks(self, teams, limit=None, divRule=True, controller=None, errors=True):
         '''Returns a series with the results of a robust tiebreaker analysis for teams
            Team codes comprise the series index in hierarchical order, while the series
            value indicates the rule (or basis) for each team besting the one below it
@@ -1496,6 +1507,10 @@ class NFL():
                      tiebreaking procedures
 
            controller A variation of NFLTiebreakerController. Pass None to use the default class
+
+           errors    If False, NFLTiebreakerError exceptions will be handled internally
+                     and a partial result will be returned. If True, the exception will
+                     be thrown normally
         '''
 
         teams = set(self._list(teams))  # important to ensure we work from a copy
@@ -1651,8 +1666,14 @@ class NFL():
                 rule = 'overall'
                 if isLog: msg(0, 'select', target=team, rule='overall')
             else:
-                # NB: we have to pass in all teams in case the divRule is in effect
-                (team,rule) = test(controller.rules(teams), teams, divRule, 0)
+                try:
+                    # NB: we have to pass in all teams in case the divRule is in effect
+                    (team,rule) = test(controller.rules(teams), teams, divRule, 0)
+                except NFLTiebreakerError:
+                    if errors:
+                        raise
+                    else:
+                        return r
 
             r[team] = rule
             teams -= {team}
