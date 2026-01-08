@@ -233,11 +233,6 @@ class NFLConference():
         if count > len(champs):
             teams = self.teams - set(champs.index)
 
-            # limit to teams that have an eligible overall record
-            # this only saves time in certain situations, but it can't hurt
-            # z = self.standings.loc[list(teams), ('overall','pct')].sort_values(ascending=False)
-            # teams = z[z >= z.iloc[count-len(champs)-1]].index
-
             others = self.host.tiebreaks(teams, limit=count-len(champs), controller=controller)
             champs = pd.concat([champs, pd.Series('', index=others.index)])
 
