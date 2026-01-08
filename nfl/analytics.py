@@ -617,7 +617,7 @@ class NFLGameMatrix(pd.DataFrame):
 
 class NFLTiebreakerController(object):
 
-    def __init__(self, nfl, teams):
+    def __init__(self, nfl, teams, limit=None):
         self.nfl = nfl
         self.tb_rules = {}
         self.teams = list(nfl._list(teams))
@@ -626,6 +626,15 @@ class NFLTiebreakerController(object):
 
         for i in ('div','conf'):
             self.tb_rules[i] = self.get_rules(i)
+
+        if limit:
+            common = self.common_rules[1:]
+            if limit not in common:
+                raise NFLScenarioError("limit was {}, must be one of {}".format(limit, ', '.join(common)))
+
+            for k,v in self.tb_rules.items():
+                self.tb_rules[k] = v[:v.index(limit)]
+
 
     def reset(self):
         '''Reset any and all internal caches
@@ -749,20 +758,6 @@ class NFLTiebreakerController(object):
 
         return self.gm.loc[teams, teams]
 
-    def limit(self, rule):
-        '''Delete all rules starting with the one specified. This is typically used
-           to skip rules that can't be evaluated in the current context (e.g. 
-           win/loss scenarios), which increases the chances of raising a
-           NFLTiebreakerError exception
-        '''
-
-        if rule is None:
-            return
-
-        for k,v in self.tb_rules.items():
-            if rule in v:
-                self.tb_rules[k] = v[:v.index(rule)]
-
     def rules(self, teams, all=False):
         '''Return tiebreaker rules for the given teams, in hierarchical order
            teams may also be a keyword, 'div' or 'conf'
@@ -785,6 +780,18 @@ class NFLTiebreakerController(object):
 
         # else, return rules that match the teams
         return self.tb_rules[k]
+
+    @property
+    def common_rules(self):
+        '''Return the list of rules common to both contexts. This represents where limits
+           can be set
+        '''
+
+        a = self.rules('div')
+        b = self.rules('conf')
+
+        c = set(a) & set(b)
+        return list( filter(lambda x: x in c, a) )
 
 class NFLSequenceMaker():
 
