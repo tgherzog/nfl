@@ -418,7 +418,7 @@ class NFLTeamMatrix(pd.DataFrame):
         t = list(teams) + ['_']
         super().__init__(0, columns=t, index=t, dtype='int')
         self.columns.name = 'opp'
-        self.index.name = 'name'
+        self.index.name = 'team'
 
     def set_score(self, team, score):
         '''Set team to the specified score
@@ -470,10 +470,10 @@ class NFLTeamMatrix(pd.DataFrame):
            This scenario provides that:
 
            1) the specified team wins against all opponents
-           3) teams ranked higher than the one specified score 0 points against each other,
+           3) teams ranked above the one specified score 0 points against each other,
               resulting in tie games
            3) Teams ranked lower than the one specified win against higher ranked ones
-           4) All teams but the one specified lose to unspecified teams
+           4) All teams but the one specified lose to unspecified opponents
         '''
 
         self[:] = 0
@@ -495,12 +495,16 @@ class NFLTeamMatrix(pd.DataFrame):
            This scenario provides that:
 
            1) the specified team loses against all opponents
-           2) teams ranked lower than the one specified beat all opponents beneath them
+           2) teams ranked above the one specified score 1 point against each other,
+              resulting in ties
+           3) teams ranked below the one specified beat all teams but lose against those
+              ranked between themselves and the one specified
+           4) All teams but the one specified beat unspecified opponents
         '''
 
         self[:] = 1
         a = self.index.get_loc(team) + 1
-        for n in range(a+1, len(self.index)-1):
+        for n in range(a, len(self.index)-1):
             self.iloc[n+1:, n] = 0
             self.iloc[:a, n] = 0
 
