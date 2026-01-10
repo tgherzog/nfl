@@ -848,21 +848,21 @@ class NFL():
         elif isinstance(ref, pd.Series):
             for w in ref.index.get_level_values('week').unique():
                 if type(w) is int:
-                    self.set(w, overwrite, ordered, **ref.xs(w, level='week').to_dict())
+                    self.set(w, overwrite=overwrite, ordered=ordered, season=season, **ref.xs(w, level='week').to_dict())
 
             return
 
         elif isinstance(ref, dict):
             for k,v in ref.items():
-                self.set(k, overwrite, ordered, **v)
+                self.set(k, overwrite=overwrite, ordered=ordered, season=season, **v)
 
             return
 
         elif isinstance(value, pd.Series):
-            self.set(w, overwrite, ordered, **value.to_dict())
+            self.set(ref, overwrite=overwrite, ordered=ordered, season=season, **value.to_dict())
             return
         elif isinstance(value, dict):
-            self.set(w, overwrite, ordered, **value)
+            self.set(ref, overwrite=overwrite, ordered=ordered, season=season, **value)
             return
 
         season = season or self.season
@@ -885,9 +885,8 @@ class NFL():
             (ht,at) = (elem['ht'],elem['at'])
             if isinstance(value, NFLTeamMatrix):
                 t = value.score(ht,at)
-                if len(t) == 2:
-                    self.games_.loc[k, ['hs', 'as', 'p']] = [t[0], t[1], True]
-                    continue
+                self.games_.loc[k, ['hs', 'as', 'p']] = [t[0], t[1], True]
+                continue
 
             if ordered:
                 for t,v in kwargs.items():
@@ -1931,7 +1930,7 @@ class NFL():
             wrapper = NFLEmptyContextWrapper
         
         with NFLScenarioMaker(self, teams, weeks, ties) as gen, wrapper(gen, **wrapper_args) as wgen:
-            df = gen.frame(['outcome'])
+            df = gen.scenarios(['outcome'])
             exceptions = pd.Series()
             if self.debug:
                 df[('debug','tm')] = np.float32(0)
@@ -1939,7 +1938,7 @@ class NFL():
 
             for option in wgen:
                 x = len(df)
-                df.loc[x] = option.to_frame()
+                df.loc[x] = option.to_scenario()
                 df.loc[x, 'outcome'] = False
                 self.set(option, season='reg')
                 ctrl.reset()

@@ -57,7 +57,7 @@ class NFLScenario(pd.Series):
 
         return z.sum()
 
-    def to_frame(self):
+    def to_scenario(self):
         '''Converts an NFLScenario of game outcomes to a Series indexed by week,team.
            The returned Series will have the same index structure as weekly columns in an NFLScenarioFrame.
            For example:
@@ -355,7 +355,7 @@ class NFLScenarioMaker():
             s[:] = row
             yield s
 
-    def frame(self, extra=[]):
+    def scenarios(self, extra=[]):
         '''Return a DataFrame structured to hold the set of scenarios. Typically
            you call this in advance of iterating over the object.
 
