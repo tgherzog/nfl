@@ -22,7 +22,7 @@ class NFLScenario(pd.Series):
         '''Returns an NFLScenario from generator data
         '''
 
-        s = NFLScenario(data, index=index, name=name, dtype=str)
+        s = NFLScenario(data, index=index, name=name, dtype='string')
         s.host = host
         return s
 
@@ -69,7 +69,7 @@ class NFLScenario(pd.Series):
                     outcomes.loc[x] = scenario.to_frame()
         '''
 
-        s = pd.Series('', index=self.host.incomplete, dtype=str, name='outcome')
+        s = pd.Series('', index=self.host.incomplete, dtype='string', name='outcome')
 
         # this object must have the same index as self.host.games
         for (k,row) in self.host.games.iterrows():
@@ -239,9 +239,35 @@ class NFLSeasonWrapper():
     def __exit__(self, exc_type, exc_value, traceback):
         self.nfl.season = self._season
 
+class NFLStateWrapper():
+    '''This class creates an context that stashes the current state of an NFL object,
+       making it easier to perform an analysis and restore the state afterwards.
+       This is an alternative to explicitly calling NFL.stash() and NFL.restore()
+       an NFL object. This makes it easier and safer to perform calculations
+       where the season must be hard-coded, for instance, calculating playoff
+       scenarios and tiebreakers.  It provides an alternative to always setting
+       the season parameter explicitly on function calls. Implementation looks like this:
+
+       nfl.season = 'post' # schedules, records, etc default to post-season
+       with NFLStateWrapper(nfl):
+          # perform operations on games and statistics
+
+       # nfl games and statistics are restored
+    '''
+
+    def __init__(self, nfl):
+        self.nfl = nfl
+
+    def __enter__(self):
+        self.state = self.nfl.stash()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.nfl.restore(self.state)
 
 
-class NFLScenarioMaker():
+
+class NFLScenarioMaker(NFLStateWrapper):
     '''Facilitates generating and testing different win/lose/tie scenarios,
        typically to analyze the outcome on the playoff picture.
 
@@ -271,11 +297,10 @@ class NFLScenarioMaker():
     '''
 
     def __init__(self, nfl, teams, weeks, ties=True):
-        self.nfl = nfl
+        super().__init__(nfl)
         self.weeks = list(nfl._weeks(weeks))
         self.teams = list(nfl._list(teams))
         self.ties = ties
-        self.stash = None
         self.games = None
         self.completed = None
         self.incomplete = None
@@ -290,7 +315,7 @@ class NFLScenarioMaker():
         self.weeks.sort()
 
     def __enter__(self):
-        self.stash = self.nfl.stash()
+        super().__enter__()
 
         # get scope of games in this run
         gm = self.nfl.games_
@@ -315,7 +340,7 @@ class NFLScenarioMaker():
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        self.nfl.restore(self.stash)
+        super().__exit__(exc_type, exc_value, traceback)
 
     def __len__(self):
         types = 2
@@ -392,8 +417,31 @@ class NFLScenarioMaker():
                   nfl.loc[at, z] = 'x'
         '''
 
-        df = NFLScenarioFrame(columns=pd.MultiIndex.from_product([self.weeks+extra, self.teams], names=['week', 'team']))
-        return df.drop(self.completed, axis=1)
+        # df = NFLScenarioFrame(columns=pd.MultiIndex.from_product([self.weeks+extra, self.teams], names=['week', 'team']))
+        if rows:
+            rows = range(len(self))
+            value = ''
+        else:
+            rows = value = None
+
+        df = NFLScenarioFrame(value, index=rows, columns=pd.MultiIndex.from_product([self.weeks, self.teams], names=['week', 'team']), dtype='string').drop(self.completed, axis=1)
+        if len(extra) > 0:
+            if type(extra) is list:
+                z = NFLScenarioFrame(index=rows, columns=pd.MultiIndex.from_product([extra, self.teams], names=['week', 'team']))
+                df = df.join(z)
+            elif type(extra) is dict:
+                for k,v in extra.items():
+                    if v is None:
+                        value = np.nan
+                        dtype = 'object'
+                    else:
+                        value = v
+                        dtype= type(v)
+
+                    z = NFLScenarioFrame(value, index=rows, columns=pd.MultiIndex.from_product([[k], self.teams], names=['week', 'team']), dtype=dtype)
+                    df = df.join(z)
+
+        return df
 
 
 class NFLTeamMatrix(pd.DataFrame):
