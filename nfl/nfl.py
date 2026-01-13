@@ -8,7 +8,8 @@ import numpy as np
 import pandas as pd
 
 from .utils import current_season, vmap, ivmap, set_dtypes, stack_copy, param_exc
-from .analytics import NFLTeamMatrix, NFLGameMatrix, NFLScenario, NFLScenarioMaker, NFLTiebreakerController, NFLSeasonWrapper
+from .analytics import NFLTeamMatrix, NFLGameMatrix, NFLScenario, NFLScenarioFrame, NFLTiebreakerController
+from .analytics import NFLSeasonWrapper, NFLStateWrapper
 from .errors import *
 from .__version__ import __version__
 
@@ -840,7 +841,9 @@ class NFL():
             # need to cast to int16 so pandas doesn't complain
             np0 = np.int16(0)
             np1 = np.int16(1)
-            vmap = {'win': [np0, np1, True], 'loss': [np1, np0, True], 'tie': [np0, np0, True]}
+            vmap = {1: [np0, np1, True], 0: [np1, np0, True], -1: [np0, np0, True]}
+            # next line is only strictly necessary if NFLScenario has different values in level 0 - not currently the case
+            ref = ref._external
             self.games_.loc[ref.index, c] = [vmap[k] for k in ref.values]
             self._dirty()
             return
@@ -1833,13 +1836,51 @@ class NFL():
         # single team code or integer
         return [teams]
 
-    def scenarios(self, teams, weeks, spots=1, ties=True, limit='victory-strength', errors='raise', wrapper=None, wrapper_args={}):
-        '''Returns a dataframe of scenarios and outcomes with the specified constraints
+    def scenarios(self, teams, weeks, ties=True):
+        '''Returns a NFLScenarioFrame
 
-           This method is essentially a wrapper for NFLScenarioMaker with
-           the most common use cases, i.e. determining playoff spots. You
-           can customize and optimize the model by implementing NFLScenarioMaker
-           directly (see docs).
+           teams    list-like of teams for which to generate scenarios
+
+           weeks    weeks for which to generate scenarios
+
+           ties     whether to include ties as possible outcomes
+        '''
+
+        teams = self._list(teams)
+        weeks = self._weeks(weeks)
+
+        gm = self.games_
+        c = (gm.index.get_level_values(0)=='reg') & (gm['p']==False)
+
+        if teams is not None:
+            c &= gm['ht'].isin(teams) | gm['at'].isin(teams)
+
+        if weeks is not None:
+            c &= gm['wk'].isin(weeks)
+
+        gm = gm[c]
+        if len(gm) == 0:
+            msg = 'There are no undetermined games in scope teams={}, weeks={}'.format(teams, weeks)
+            raise NFLScenarioError(msg)
+
+        sch = self.schedule(teams, weeks, by='team', season='reg')
+        incomplete = sch[sch.isna().any(axis=1)].index
+
+        wlt = [1,0]
+        if ties:
+            wlt += [-1]
+
+        df = NFLScenarioFrame.make(self, incomplete, 0, index=range(len(wlt) ** len(gm)), columns=gm.index, dtype='int8')
+
+        wlt = np.array(wlt, dtype='int8')
+        for i in range(len(df.columns)):
+            df[df.columns[-(i+1)]] = np.tile( np.repeat(wlt, len(wlt) ** i), len(wlt) ** (len(df.columns)-1-i) ) 
+
+        return df.astype('int8')
+
+
+    def analyze(self, teams, weeks, spots=1, ties=True, limit='victory-strength', errors='raise', wrapper=None, wrapper_args={}):
+        '''Returns a dataframe of scenarios and outcomes with the specified constraints
 
            teams    list-like of teams for which to generate scenarios
 
@@ -1858,7 +1899,7 @@ class NFL():
            ties     whether to include ties as possible outcomes
 
            limit    limit (stop) tiebreaker analysis just before the specified rule. The
-                    'win/loss/tie' approach in NFLScenarioMaker doesn't model the impact
+                    'win/loss/tie' approach doesn't model the impact
                     of point spreads, required by the "net points" rules, nor the impact
                     of games outside the scenario scope, required by the "strength of
                     victory/schedule" rules. If the tiebreaker method runs out of
@@ -1878,13 +1919,6 @@ class NFL():
 
            wrapper_args Additional arguments to instantiate the wrapper
 
-           The resulting DataFrame will have 3**games rows, each row representing a unique
-           scenario and outcome, where rows is the number of games played collectively by teams in the
-           range of weeks. If ties=False the DataFrame will have 2**games rows.
-           The DataFrame will have a MultiIndex column format, the product of weeks
-           and teams, with an extra 1st level named 'playoffs' that includes Boolean columns
-           for each team indicating whether they test positive (based on the value of spots)
-           for that scenario.
 
            The example below runs all possible scenarios for weeks 17 and 18, testing whether
            NE or BUF have the superior record compared to each other. This can be used to
@@ -1898,13 +1932,13 @@ class NFL():
            1     loss  win   win  loss     True  False
            . . .
 
-           Examples:
+           More examples:
 
            # determine which teams can still win their division after week15, not allowing for ties
            nfl.scenarios('NFC-North', range(16,19), ties=False)
 
            # determine playoff scenarios for an entire conference: this will take a *long* time
-           # if obvious ineligibles are not first weeded out
+           # especially if obvious ineligibles are not first weeded out
            nfl.scenarios('AFC', [17, 18], spots=0)
         '''
 
@@ -1928,41 +1962,38 @@ class NFL():
 
         if wrapper is None:
             wrapper = NFLEmptyContextWrapper
-        
-        with NFLScenarioMaker(self, teams, weeks, ties) as gen, wrapper(gen, **wrapper_args) as wgen:
-            df = gen.scenarios(['outcome'])
-            exceptions = pd.Series()
-            if self.debug:
-                df[('debug','tm')] = np.float32(0)
-                df[('debug','cache')] = False
 
-            for option in wgen:
-                x = len(df)
-                df.loc[x] = option.to_scenario()
-                df.loc[x, 'outcome'] = False
-                self.set(option, season='reg')
+        df = self.scenarios(teams, weeks, ties)
+        df[pd.MultiIndex.from_product([['outcome'], teams])] = False
+        if self.debug:
+            df[('debug','tm')] = np.float32(0)
+            df[('debug','cache')] = False
+
+        exceptions = pd.Series()
+
+        with NFLStateWrapper(self):
+            for k in wrapper(df.index, **wrapper_args):
+                self.set(df.S(k))
                 ctrl.reset()
                 try:
                     st = pc()
                     if spots == 0:
                         p = conf.playoffs(controller=ctrl)
                         z = [('outcome',i) for i in set(teams) & set(p.index)]
-                        df.loc[x, z] = True
+                        df.loc[k, z] = True
                     else:
                         tb = self.tiebreaks(teams, limit=spots, controller=ctrl)
                         z = [('outcome',i) for i in tb.index[:spots]]
-                        df.loc[x, z] = True
+                        df.loc[k, z] = True
 
                     if self.debug:
-                        df.loc[x, ('debug','tm')] = pc()-st
-                        df.loc[x, ('debug','cache')] = self.stats is None
+                        df.loc[k, ('debug','tm')] = pc()-st
+                        df.loc[k, ('debug','cache')] = self.stats is None
 
                 except NFLTiebreakerError as err:
-                    if errors == 'ignore':
-                        df.drop(x, inplace=True)
-                    elif errors == 'log':
-                        exceptions[x] = ','.join(err.teams)
-                    else:
+                    if errors == 'log':
+                        exceptions[k] = ','.join(err.teams)
+                    elif errors != 'ignore':
                         raise
 
             if len(exceptions):

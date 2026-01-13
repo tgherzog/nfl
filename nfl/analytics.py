@@ -6,32 +6,83 @@ from .errors import *
 from .sequence import reorder, expand, expand_len, expand_width
 import math
 
-class NFLTiebreakerError(Exception):
-    pass
 
 class NFLScenario(pd.Series):
-    '''A series of game outcomes created by NFLScenarioMaker. Values will
-       be one of 'win', 'loss' or 'tie', indexed by values in the *master*
-       games database
+    '''A series of game outcomes in an NFLScenarioFrame
     '''
 
-    _metadata = ['host']
+    _metadata = ['nfl', 'schedule']
+
+    @property
+    def _constructor(self):
+        return NFLScenario
+
+    @property
+    def _constructor_expanddim(self):
+        def f(*args, **kw):
+            return NFLScenarioFrame.make(self.nfl, self.schedule, *args, **kw)
+
+        return f
+
+    @property
+    def _external(self):
+        '''Return self with an index that matches nfl.games_. This ensures
+           that index column names match and that any custom rows have been removed.
+           Otherwise join typically fails and you may raise KeyErrors
+        '''
+        return self.reindex(self.index.set_names(['seas','id']))[self.index.get_level_values(0)=='reg']
 
     @staticmethod
-    def from_generator(host, data, index, name=None):
-        '''Returns an NFLScenario from generator data
+    def from_games(nfl, teams=None, weeks=None, index=None):
+        '''Create an NFLScenario from the current game database. This is 
+           intended for troubleshooting analysis and isn't really relevant elsewhere.
+           It can only be used on the regular season
+
+           teams and weeks specify the domain of games for the scenario.
+           Alternatively, index (e.g. an existing NFLScenario or NFLScenarioFrame)
+           can be specified
         '''
 
-        s = NFLScenario(data, index=index, name=name, dtype='string')
-        s.host = host
+        if isinstance(index, NFLScenario):
+            gm = nfl.games_.loc[index.index]
+            sch = index.schedule
+
+        elif isinstance(index, NFLScenarioFrame):
+            gm = nfl.games_.loc[index.columns]
+            sch = index.schedule
+
+        elif index is not None:
+            gm = nfl.games_.loc[index]
+
+            # infer schedule from the game database
+            ht = gm.rename(columns={'wk': 'week', 'ht': 'team'}).set_index(['week', 'team'])['p']
+            at = gm.rename(columns={'wk': 'week', 'at': 'team'}).set_index(['week', 'team'])['p']
+            sch = pd.concat([ht, at]).sort_index().index
+
+        else:
+            teams = nfl._list(teams)
+            weeks = nfl._weeks(weeks)
+            gm = nfl.games_
+            gm = gm[gm.index.get_level_values(0)=='reg']
+            if teams is not None:
+                gm = gm[gm['at'].isin(teams) | gm['ht'].isin(teams)]
+
+            if weeks is not None:
+                gm = gm[gm['wk'].isin(weeks)]
+
+            sch = nfl.schedule(teams, weeks, by='team', season='reg').index
+
+        s = NFLScenario(gm.apply(lambda x: 1 if x['hs'] > x['as'] else (0 if x['hs'] < x['as'] else -1), axis=1), dtype='int8')
+        s.nfl = nfl
+        s.schedule = sch
         return s
+
 
     def weeks(self, team):
         '''Return a Series of outcomes for the specified team, one row per week
         '''
 
-        x = self.host.games.join(self.rename('outcome'))
-        return x[(x['ht']==team) | (x['at']==team)]['outcome']
+        return self.by('week').loc[:, team]
 
     def st(self, team, outcome='win', op='count'):
         '''Test summarized outcomes for a given team.
@@ -57,162 +108,171 @@ class NFLScenario(pd.Series):
 
         return z.sum()
 
-    def to_scenario(self):
-        '''Converts an NFLScenario of game outcomes to a Series indexed by week,team.
-           The returned Series will have the same index structure as weekly columns in an NFLScenarioFrame.
-           For example:
+    def by(self, how):
+        '''Returns the populated schedule for this scenario
 
-           with NFLScenarioMaker(nfl, 'NFC-North', -1) as gen:
-                outcomes = gen.frame(['outcome'])
-                for scenario in gen:
-                    x = len(outcomes)
-                    outcomes.loc[x] = scenario.to_frame()
+           If how is 'week' the schedule is sorted by week then team. If
+           'team' then the opposite
         '''
 
-        s = pd.Series('', index=self.host.incomplete, dtype='string', name='outcome')
+        if how not in ['week','team']:
+            raise param_exc('how', how)
 
-        # this object must have the same index as self.host.games
-        for (k,row) in self.host.games.iterrows():
-            result = self.get(k, '')
-            if (row['wk'],row['ht']) in s.index:
-                s[(row['wk'],row['ht'])] = result
+        z = pd.Series('', index=self.schedule)
+        s = self._external
+        g = self.nfl.games_.loc[s.index].join(s.rename('o')).rename(columns={'wk': 'week'})
 
-            if (row['wk'],row['at']) in s.index:
-                s[(row['wk'],row['at'])] = self.host.aresults[result]
+        ht = g.rename(columns={'ht': 'team'}).set_index(['week','team'])['o'].map({1: 'win', 0: 'loss', -1: 'tie'})
+        at = g.rename(columns={'at': 'team'}).set_index(['week','team'])['o'].map({1: 'loss', 0: 'win', -1: 'tie'})
 
-        return s
+        z.update(ht)
+        z.update(at)
 
-    def to_wlt(self):
-        '''Converts an NFLScenario to a win-loss-tie summary consistent with what NFL.wlt returns
+        if how == 'team':
+            z = z.swaplevel(1,0).sort_index()
+
+        return z.rename('outcome')
+
+    @property
+    def wlt(self):
+        '''Converts the win-loss-tie summary for this scenario
         '''
 
-        z = pd.DataFrame(0, columns=['win','loss','tie'], index=self.host.teams)
-        for (k,row) in self.items():
-            gm = self.host.games.loc[k]
-            if gm['ht'] in z.index:
-                z.loc[gm['ht'], row] += 1
-
-            if gm['at'] in z.index:
-                z.loc[gm['at'], self.host.aresults[row]] += 1
-
-        return z
-
-        # z = self.to_frame().reset_index().groupby(['team', 'outcome']).count().unstack().xs('week', axis=1)
-        # x = pd.DataFrame(0, columns=['win','loss','tie'], index=z.index)
-        # x.loc[:, z.columns] = z
-        # return x
+        return self.by('week').reset_index().groupby(['team','outcome'])['week'].count().unstack().fillna(0).astype('int16')
 
 class NFLScenarioFrame(pd.DataFrame):
     '''A special DataFrame used for analyzing scenarios. Columns are
-       a 2-level MultiIndex consisting of weeks in level 0 and teams in level 1.
-       Additional columns are typically also included, so long as their
-       level-0 columns names are strings not ints, which is now the class
-       identifies week columns
+       a 2-level MultiIndex that aigns with the index in nfl.games_
+       Additional columns may be added
     '''
-    
+
+    _metadata = ['nfl', 'schedule']
+
+    @staticmethod
+    def make(nfl, schedule, *args, **kw):
+        df = NFLScenarioFrame(*args, **kw)
+        df.columns = df.columns.set_names(['cat','code'])
+        df.nfl = nfl
+
+        # schedule is a 2-level index of weeks and teams used to generate this
+        # DataFrame, and is used in transforms
+        df.schedule = schedule
+        return df
+
     @property
-    def wt_len(self):
-        '''Returns the number of week/team columns in the dataframe
-        '''
-
-        level = 0 if self.columns.names[0] == 'week' else 1
-        for n in range(len(self.columns)):
-            if type(self.columns[n][level]) is not int:
-                return n
-
-        return len(self.columns)
+    def _constructor(self):
+        return NFLScenarioFrame
 
     @property
-    def I(self):
-        '''Return the dataframe with the week/team levels inverted
+    def _constructor_sliced(self):
+        def f(*args, **kw):
+            s = NFLScenario(*args, **kw)
+
+            # somehow, NFLScenarioFrame objects are getting allocated or copied
+            # without their attributes, so these checks are necessary. It seems
+            # to be under the __repr__ chain, where they are non-critical
+            # If missing, I'm marking these with a string to help troubleshoot
+            if hasattr(self, 'schedule'):
+                s.schedule = self.schedule
+            else:
+                s.schedule = 'error'
+
+            if hasattr(self, 'nfl'):
+                s.nfl = self.nfl
+            else:
+                s.nfl = 'error'
+
+            return s
+
+        return f
+
+
+    def by(self, how):
+        '''Return the object with games replaced with NFLScenario.by() results
+           This is expensive; best to use on small slices
         '''
 
-        # week columns are assumed to be at the beginning of the dataframe
-        n = self.wt_len
-        return self.iloc[:, :n].reorder_levels([1,0], axis=1).sort_index(axis=1).join(self.iloc[:, n:].reorder_levels([1, 0], axis=1).sort_index(level=0, axis=1,sort_remaining=False))
+        x = len(self.columns[self.columns.get_level_values(0)=='reg'])
+        if x < len(self.columns):
+            return pd.DataFrame( self.apply(lambda s: pd.concat([s.by(how), s.iloc[x:]]), axis=1) )
 
-    
-    @property
-    def X(self):
-        '''Return an extended frame with summary info
+        # downcast this back to DataFrame since rows no longer function as NFLScenarios
+        return pd.DataFrame( self.apply(lambda s: s.by(how), axis=1) )
+
+
+    def S(self, at):
+        ''' Return the NFLScenario at the given row using self.loc[]. This option
+            preserves the original Series structure, which will otherwise be up-cast
+            if other columns are added to the DataFrame
         '''
 
-        level = 0 if self.columns.names[0] == 'team' else 1
-        n = self.wt_len
-        teams = self.columns[:n].get_level_values(level).unique()
-        elems = ['win','loss','tie']
-        x = pd.DataFrame(columns=pd.MultiIndex.from_product([elems, teams], names=['week','team']), index=self.index)
-        for elem in elems:
-            for t in teams:
-                x[(elem, t)] = self.st(t, elem)
+        return self.loc[at, self.columns.get_level_values(0)=='reg']
 
-        if (self.iloc[:, :n]=='tie').any(axis=None) == False:
-            x.drop(columns='tie', level=0, inplace=True)
+    def T(self, team, value=None):
+        '''Return games for the specified team and optionally apply outcome tests
 
-        if level == 0:
-            return self.iloc[:, :n].join( self.iloc[:, n:].join(x.reorder_levels([1,0], axis=1)).sort_index(level=0, axis=1, sort_remaining=False) )
+           If value is None then the games for the specified team are returned
+           in week order. Values will be mapped to outcomes from the specified
+           team's perspective: 1 indicates a win, 0 a loss, -1 a tie
 
-        return self.join(x)
+           If value is a single value then it is evaluated against the specified
+           games and a single Series is returned indicating which rows match
+           for all games. 'win', 'loss', 'tie' can be
+           specified in lieu of 1, 0, -1
 
+           If value is a list-like then you can specify game-specific values,
+           e.g. [1, 0, 1] or ['win', 'loss', 'win']. None values in the list
+           are treated like wildcards
 
-    def weeks(self, team):
-        '''Return weeks for the specified team
+           This method is designed to make sub-setting easier
+
+           Examples:
+
+           # return outcomes for the Packers
+           df.T('GB')
+
+           # just scenarios where the Bears run the table
+           df[ df.T('CHI' 'win') ]
+
+           # just scenarios where the Lions win the the 1st game and lose the 3rd
+           df[ df.T('DET', ['win', None, 'loss']) ]
+
+           # just scenarios where the Vikings win exactly 2 games
+           df[ (df.T('MIN')==1).sum(axis=1)==2 ]
         '''
 
-        # team/week columns could be inverted
-        level = 0 if self.columns.names[0] == 'team' else 1
-        n = self.wt_len
-        return self.iloc[:, :n].xs(team, level=level, axis=1)
+        x = len(self.columns[self.columns.get_level_values(0)=='reg'])
+        gm = self.nfl.games_.loc[self.columns[:x]]
+        gm = gm[(gm['at']==team) | (gm['ht']==team)]
 
-    def test(self, team, *values):
-        '''Apply tests by week to a given team
+        vmap = {'win': 1, 'loss': 0, 'tie': -1}
 
-           team        Team code
-           
-           values      Test values for each week for that team ('win'|1,'loss'|-,'tie'|-1). Use
-                       None to ignore a given week
+        df = self.loc[:, gm.index] # avoid SettingWithCopyWarning
+        for elem in gm[gm['at']==team].index:
+            df[elem] = df[elem].replace({1:0, 0:1})
 
-           The return is a DataFrame with the same index as the object and columns for each week
-        '''
+        if value is None:
+            return df
+        elif type(value) is not str and hasattr(value, '__iter__'):
+            # assumed to be an array of matching values - None to omit
+            c = []
+            v = []
+            n = 0
+            for x in value:
+                if n >= len(df.columns):
+                    break
 
-        z = self.weeks(team)
+                if x is not None:
+                    c.append(df.columns[n])
+                    v.append(vmap.get(x,x))
 
-        c = list(z.columns)
+                n += 1
 
-        # a terse way to pad with None and trim to length
-        v = (list(values) + ([None] * (len(c)-len(values))))[:len(c)]
+            return (df[c] == v).all(axis=1)
 
-        # now eliminate values and columns that are None
-        (c,v) = zip(*filter(lambda x: x[1] is not None, zip(c,v)))
+        # else assumed to be a scalar
+        return (df == vmap.get(value, value)).all(axis=1)
 
-        c = list(c)
-        v = list(map(lambda x: vmap(x), v))
-
-        return z[c].eq(v).all(axis=1)
-
-    def st(self, team, outcome='win', op='count'):
-        '''Test summarized outcomes for a given team
-
-           team     team code
-
-           outcome  outcome to count
-
-           op       operation - one of:
-
-                    count: returns count of outcome
-                    all:   True if all weeks equal outcome, else False
-                    any:   True if any week equals outcome, else False
-
-           The return is a Series of either counts or Booleans with the same index as the object
-        '''
-
-        z = self.weeks(team) == vmap(outcome)
-        if op == 'all':
-            return z.all(axis=1)
-        elif op == 'any':
-            return z.any(axis=1)
-
-        return z.sum(axis=1)
 
 class NFLSeasonWrapper():
     '''This class creates an context that changes the default season on
@@ -264,184 +324,6 @@ class NFLStateWrapper():
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.nfl.restore(self.state)
-
-
-
-class NFLScenarioMaker(NFLStateWrapper):
-    '''Facilitates generating and testing different win/lose/tie scenarios,
-       typically to analyze the outcome on the playoff picture.
-
-       If impelemented in a "with" context the object saves and restores
-       the game state.
-
-       Typical usage:
-
-       weeks = [17, 18]
-       teams = ['LAC', 'DEN', 'CIN', 'IND', 'MIA']
-       with NFLScenarioMaker(nfl, weeks, teams, ties=False) as s:
-          df = s.frame(['playoffs'])
-          for option in s:
-             z = len(df)
-
-       NFLScenarioMaker is an iterable that you can use in wrappers like this:
-
-       from tqdm import tqdm     # progress bar wrapper
-       with NFLScenarioMaker(nfl, 'NFC-North', -1) as gen, tqdm(gen) as tgen:
-          for scenario in tgen:
-            ...
-
-       Note that while technically you can initialize with all teams and/or weeks
-       by passing None, this is only useful towards the end of the season when
-       most games have either been played or stipulated using NFL.set. Otherwise
-       there's simply too many potential outcomes to be meaningfully processed
-    '''
-
-    def __init__(self, nfl, teams, weeks, ties=True):
-        super().__init__(nfl)
-        self.weeks = list(nfl._weeks(weeks))
-        self.teams = list(nfl._list(teams))
-        self.ties = ties
-        self.games = None
-        self.completed = None
-        self.incomplete = None
-
-        # fixed array, used by related classes, declared here for efficiency
-        # defines 'opposing' outcomes
-        self.aresults = {'win': 'loss', 'loss': 'win', 'tie': 'tie'}
-
-
-        # all resulting DataFrames and Series should be sorted by team and week
-        self.teams.sort()
-        self.weeks.sort()
-
-    def __enter__(self):
-        super().__enter__()
-
-        # get scope of games in this run
-        gm = self.nfl.games_
-
-        c = (gm.index.get_level_values(0)=='reg') & (gm['p']==False)
-
-        if self.teams is not None:
-            c &= gm['ht'].isin(self.teams) | gm['at'].isin(self.teams)
-
-        if self.weeks is not None:
-            c &= gm['wk'].isin(self.weeks)
-
-        gm = gm[c]
-
-        # The games index defines the structure for each scenario
-        self.games = gm[['wk','at','ht']]
-
-        # complete and incomplete are transformations of games.index, structured by [week,team]
-        sch = self.nfl.schedule(self.teams, self.weeks, by='team', season='reg')
-        self.completed = sch.dropna().index
-        self.incomplete = sch.index.drop(self.completed)
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
-
-    def __len__(self):
-        types = 2
-        if self.ties:
-            types += 1
-
-        return types ** len(self.games)
-
-    def __iter__(self):
-        '''Iterate over possible scenarios
-        '''
-
-        # subroutine based on this:
-        # https://stackoverflow.com/questions/1208118/using-numpy-to-build-an-array-of-all-combinations-of-two-arrays/1235363#1235363
-        # 12/24: new implementation using the "yield from" construct, which returns a generator
-        # instead of a potentally very large double array
-        def outcomes(arrays, z=[]):
-
-            x = arrays[0]
-            if len(arrays) > 1:
-                for elem in x:
-                    yield from outcomes(arrays[1:], z+[elem])
-            else:
-                for elem in x:
-                    yield z + [elem]
-
-        if len(self.games) == 0:
-            msg = 'There are no undetermined games in scope teams={}, weeks={}'.format(self.teams, self.weeks)
-            raise NFLScenarioError(msg)
-
-        s = NFLScenario.from_generator(self, 0, index=self.games.index, name='outcome')
-        values = ('win','loss','tie')
-        if not self.ties:
-            values = values[:-1]
-
-        for row in outcomes([values] * len(self.games)):
-            s[:] = row
-            yield s
-
-    def scenarios(self, extra=[]):
-        '''Return a DataFrame structured to hold the set of scenarios. Typically
-           you call this in advance of iterating over the object.
-
-           extra specifiies additional level-0 column names.
-
-           The resulting DataFrame will have a MultiIndex column that is the product
-           of weeks and teams, plus an extra set of team columns for each 1st-level
-           name in extra. For example:
-
-           >>> with NFLScenarioMaker(nfl, ['NE', 'BUF'], [17,18]) as gen:
-           ...   df = gen.frame(['divchamp'])
-           ...   df.loc[0] = np.nan # each row defines a unique scenario and outcome
-           ...   print(df)
-           ... 
-           week  17      18     divchamp    
-           team  NE BUF  NE BUF       NE BUF
-           0    NaN NaN NaN NaN      NaN NaN
-
-           Typical example:
-
-           teams = {'DEN', 'MIA', 'LAC'}
-           weeks = [17, 18]
-
-           with nfl.scenarios(weeks, teams) as s:
-               df = s.frame(['playoff'])
-
-               # NB: computationally intense: up to 729 possibilities, could take 10m or more
-               for option in s:
-                  at = len(df)
-                  df.loc[at] = option.to_frame()
-                  nfl.loc[at, 'playoff'] = ''
-                  p = nfl.AFC.playoffs()
-                  z = [('playoff', i) for i in set(teams) & set(p.index)]
-                  nfl.loc[at, z] = 'x'
-        '''
-
-        # df = NFLScenarioFrame(columns=pd.MultiIndex.from_product([self.weeks+extra, self.teams], names=['week', 'team']))
-        if rows:
-            rows = range(len(self))
-            value = ''
-        else:
-            rows = value = None
-
-        df = NFLScenarioFrame(value, index=rows, columns=pd.MultiIndex.from_product([self.weeks, self.teams], names=['week', 'team']), dtype='string').drop(self.completed, axis=1)
-        if len(extra) > 0:
-            if type(extra) is list:
-                z = NFLScenarioFrame(index=rows, columns=pd.MultiIndex.from_product([extra, self.teams], names=['week', 'team']))
-                df = df.join(z)
-            elif type(extra) is dict:
-                for k,v in extra.items():
-                    if v is None:
-                        value = np.nan
-                        dtype = 'object'
-                    else:
-                        value = v
-                        dtype= type(v)
-
-                    z = NFLScenarioFrame(value, index=rows, columns=pd.MultiIndex.from_product([[k], self.teams], names=['week', 'team']), dtype=dtype)
-                    df = df.join(z)
-
-        return df
 
 
 class NFLTeamMatrix(pd.DataFrame):
