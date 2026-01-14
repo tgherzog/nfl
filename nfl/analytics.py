@@ -325,6 +325,25 @@ class NFLStateWrapper():
     def __exit__(self, exc_type, exc_value, traceback):
         self.nfl.restore(self.state)
 
+class NFLEmptyContextWrapper():
+    ''' An empty wrapper to use in code requiring a context object when none
+        is specified by the user. Typically this is used as a fallback for
+        code that provides optional support for tqdm or other progress reporting toos
+    '''
+
+    def __init__(self, obj, **kwargs):
+        self.obj = obj
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        pass
+
+    def __iter__(self):
+        return self.obj.__iter__()
+
 
 class NFLTeamMatrix(pd.DataFrame):
     '''This class specifies a team matrix with potential outcomes.
@@ -570,13 +589,19 @@ class NFLTiebreakerController(object):
                 self.tb_rules[k] = v[:v.index(limit)]
 
 
-    def reset(self):
+    def reset(self, reload=False):
         '''Reset any and all internal caches
+
+           Set reload to True to reload caches immediately (otherwise, lazy load)
         '''
 
         self.tb_cache = {}
         self.stats = None
         self.gm = None
+
+        if reload:
+            self.stats = self.nfl._stats().loc[self.teams]
+            self.gm = self.nfl.matrix(self.teams, season='reg')
 
     def get_rules(self, n):
         '''Return the rule list for category n (div|conv)
@@ -646,10 +671,10 @@ class NFLTiebreakerController(object):
                 return result(s)
 
             elif rule == 'common-games':
-                return result(self.nfl.wlt(teams, within=self.nfl.opponents(teams)))
+                return result(self.nfl.wlt(teams, within=self.nfl.opponents(teams, allGames=True)))
 
             elif rule == 'common-netpoints':
-                s = self.nfl.wlt(teams, within=self.nfl.opponents(teams), points=True)
+                s = self.nfl.wlt(teams, within=self.nfl.opponents(teams, allGames=True), points=True)
                 return result(s['scored'] - s['allowed'])
 
             elif rule == 'overall-netpoints':

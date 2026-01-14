@@ -8,10 +8,10 @@ class NFLTiebreakerError(NFLError):
     def __init__(self, msg, teams, rule):
     	super().__init__(msg)
     	self.teams = teams
-    	self.rule = rule
+    	self.rules = rules
 
     def __str__(self):
-    	return '{} (teams: {}, last rule: {})'.format(self.args[0], ','.join(self.teams), self.rule)
+    	return '{} (teams: {}, rules: {})'.format(self.args[0], ','.join(self.teams), self.rules)
 
 class NFLScenarioError(NFLError):
 	pass

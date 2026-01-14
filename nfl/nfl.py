@@ -9,7 +9,7 @@ import pandas as pd
 
 from .utils import current_season, vmap, ivmap, set_dtypes, stack_copy, param_exc
 from .analytics import NFLTeamMatrix, NFLGameMatrix, NFLScenario, NFLScenarioFrame, NFLTiebreakerController
-from .analytics import NFLSeasonWrapper, NFLStateWrapper
+from .analytics import NFLSeasonWrapper, NFLStateWrapper, NFLEmptyContextWrapper
 from .errors import *
 from .__version__ import __version__
 
@@ -543,7 +543,7 @@ class NFL():
 
         self.games_ = stash.games.copy()
         self.week   = stash.week
-        self.stats  = None
+        self._dirty()
 
     def update(self, season=None):
         ''' Updates team and game data from the underlying API
@@ -1660,7 +1660,7 @@ class NFL():
                 # otherwise, everyone ties, so proceed to the next rule
 
             # if we get this far, we've run out of rules, and remaining teams are a tie
-            raise NFLTiebreakerError("Can't resolve tiebreakers with the given rules", teams, rules[-1])
+            raise NFLTiebreakerError("Can't resolve tiebreakers with the given rules", teams, rules)
 
 
         # Get overall stats as efficiently as possible; defer a stats rebuild until we really need it
@@ -2059,24 +2059,6 @@ class NFLScoreboard():
             z = z[z['state']==state]
 
         return z.drop('state',axis=1)
-
-class NFLEmptyContextWrapper():
-    ''' An empty wrapper to use in code requiring a context object when none
-        is specified by the user
-    '''
-
-    def __init__(self, obj, **kwargs):
-        self.obj = obj
-        pass
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        pass
-
-    def __iter__(self):
-        return self.obj.__iter__()
 
 class NFLPlayDescWrapper(str):
     '''Just a bit of syntax sugar to print a clean string to the console - no need to wrap in a print() function
