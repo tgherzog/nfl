@@ -695,7 +695,7 @@ class NFL():
         gd = NFLDataFrame(columns=idx)
         gd.host = self
         standings = self.standings.copy()
-        dates = self.schedule(weeks=src.week, by='game', ts=True)['date']
+        dates = self.schedule(weeks=src.week, season=src.season, by='game', ts=True)['date']
         streak = self.streak()
         for elem in standings['div'].unique():
             idx = standings[standings['div']==elem].index

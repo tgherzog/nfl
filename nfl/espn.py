@@ -270,6 +270,7 @@ class NFLSourceESPN(NFLSource):
 
             df = NFLDataFrame(columns=['team', 'period','start','pos','plays','yds','elapsed','result', 'pts', game['at'], game['ht']])
             df.host = nfl
+            game_pts = 0
             for drive in result['drives']['previous']:
                 t   = drive['team']['abbreviation']
                 per = drive['start']['period']['number']
@@ -280,10 +281,12 @@ class NFLSourceESPN(NFLSource):
                 ela = drive['timeElapsed']['displayValue']
                 out = drive.get('displayResult', '')
 
-                pts = (drive['plays'][-1]['homeScore'] + drive['plays'][-1]['awayScore']) - (drive['plays'][0]['homeScore'] + drive['plays'][0]['awayScore'])
+
+                pts = drive['plays'][-1]['homeScore'] + drive['plays'][-1]['awayScore'] - game_pts
                 if pts > 0:
                     ascore = drive['plays'][-1]['awayScore']
                     hscore = drive['plays'][-1]['homeScore']
+                    game_pts += pts
                 else:
                     ascore = hscore = ''
 
