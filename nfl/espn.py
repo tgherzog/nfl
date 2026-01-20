@@ -225,7 +225,7 @@ class NFLSourceESPN(NFLSource):
 
             return df
 
-    def plays(self, nfl, game, drive, count):
+    def plays(self, nfl, game, drive):
 
         if game is not None:
             result = self.gameinfo(game.name)
@@ -233,9 +233,7 @@ class NFLSourceESPN(NFLSource):
             if not result.get('drives'):
                 return None         # future games have no drive data
 
-            df = NFLPlaysFrame(columns=['team', 'drive', 'codes', 'period', 'clock', 'score', 'down', 'loc', 'yds', 'type', 'desc'])
-            df.gameInfo = '{} v {} (week {})'.format(game['at'], game['ht'], game['wk'])
-            df.host = nfl
+            df = NFLPlaysFrame.make(game)
             n = 0
             for drv in result['drives']['previous']:
                 for play in drv['plays']:
@@ -244,19 +242,23 @@ class NFLSourceESPN(NFLSource):
                         if play['start']['team']['id'] != play['end']['team']['id']:
                             codes += 'T'
 
+                    pos = play['start'].get('possessionText','')
+                    t = pos.split(' ')
+                    if len(t) == 2:
+                        if t[0] == drv['team']['abbreviation']:
+                            pos = '<{}'.format(t[1])
+                        else:
+                            pos = '>{}'.format(t[1])
+
                     df.loc[len(df)] = [drv['team']['abbreviation'], n, codes, play['period']['number'], play['clock']['displayValue'],
-                        '{}-{}'.format(play['awayScore'], play['homeScore']),
-                        play['start'].get('shortDownDistanceText',''),
-                        play['start'].get('possessionText',''), play.get('statYardage',np.nan), play['type']['text'], play['text']
+                        play['awayScore'], play['homeScore'], play['start'].get('shortDownDistanceText',''), pos,
+                        play.get('statYardage',np.nan), play['type']['text'], play['text']
                     ]
 
                 n += 1
 
             if drive is not None:
                 df = df[df['drive']==drive]
-
-            if count is not None and count > 0:
-                return df.iloc[-count:]
 
             return df
 

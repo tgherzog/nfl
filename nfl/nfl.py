@@ -2,6 +2,7 @@
 import sys
 import logging
 import copy
+import textwrap
 from datetime import datetime
 from time import perf_counter as pc
 import numpy as np
@@ -98,7 +99,7 @@ class NFLTeam():
         return self.host.streak(self.code)
 
 
-    def plays(self, drive=None, count=None, week=None, season=None):
+    def plays(self, drive=None, week=None, season=None):
         '''Returns most recent plays from the specified game.
 
            drive:   drive number (the index from the DataFrame returned by NFLTeam.drives())
@@ -120,11 +121,10 @@ class NFLTeam():
         else:
             game = self.active_game
 
-        if drive is None and count is None:
-            count = 10
+        if game is None:
+            return None
 
-        if game is not None:
-            return self.host.engine.plays(self.host, game, drive, count)
+        return self.host.engine.plays(self.host, game, drive)
 
     def drives(self, week=None, season=None):
         '''Returns drive summary from the specified game as a DataFrame
@@ -2068,24 +2068,6 @@ class NFLPlayDescWrapper(str):
         '''
         return self
 
-class NFLPlay(pd.Series):
-
-    @property
-    def _constructor(self):
-        return NFLPlay
-
-    @property
-    def _constructor_expanddim(self):
-        return NFLPlaysFrame
-
-    @property
-    def text(self):
-        '''Return the readout of a single play. Negative values are treated
-           as offsets (i.e. from the end of the frame) while non-negative values
-           are treated as ordinary keys
-        '''
-        return (NFLPlayDescWrapper(self['desc']))
-
 class NFLDataFrame(pd.DataFrame):
     ''' Subclass of Pandas.DataFrame that displays recognized columns as
         team names and codes, in lieu of just codes.
@@ -2145,29 +2127,61 @@ class NFLDataFrame(pd.DataFrame):
 
 class NFLPlaysFrame(NFLDataFrame):
 
-    _metadata = ['gameInfo', 'host']
+    _metadata = ['hteam', 'ateam']
+    _columns = pd.Index(['team', 'drive', 'codes', 'period', 'clock', 'as', 'hs', 'down', 'loc', 'yds', 'type', 'desc'])
 
     @property
     def _constructor(self):
         return NFLPlaysFrame
 
-    @property
-    def _constructor_sliced(self):
-        return NFLPlay
+    @staticmethod
+    def make(game):
+        df = NFLPlaysFrame(columns=NFLPlaysFrame._columns)
+        df.hteam = game['ht']
+        df.ateam = game['at']
+        return df
 
     def __repr__(self):
-        s = self.gameInfo
-        if s:
-            s += '\n'
+        if len(set(NFLPlaysFrame._columns) - set(self.columns)) > 0:
+            # a slice or some other transformation we can't deal with
+            return super().__repr__()
 
-        return s + super().__repr__()
+        if len(self) < 10 or len(self['drive'].unique()) == 1:
+            z = self
+        else:
+            z = self.iloc[-10:]
 
-    def text(self, offset=0):
-        '''Returns the readout from the most recent play, counting from the bottom
+        def columns(data, widths):
+            '''Return aligned columns of text
+            '''
 
-           offset:      offset from the end of the DataFrame
-        '''
-        return self.iloc[-(offset+1)].text
+            sz = 0
+            for i in data:
+                sz = max(sz, len(i))
+
+            data = [i + ['']*(sz-len(i)) for i in data]
+            s = ''
+            for row in zip(*data):
+                for n in range(len(row)):
+                    s += row[n].ljust(widths[n])
+
+                s += '\n'
+
+            return s
+
+        report = ''
+        width = 120
+        for k,row in z.iterrows():
+            misc = [str(k), str(row['drive'])]
+            scores = ['{} {}'.format(self.ateam, self.hteam), '{:3} {:3}'.format(row['as'], row['hs'])]
+            times  = ['{} {:<3} {}'.format(row['team'], row['loc'], row['down']), '{} Q{}'.format(row['clock'], row['period'])]
+            text = []
+            for line in row['desc'].split('\n'):
+                text += textwrap.wrap(line, width - 30)
+
+            report += columns([misc, scores, times, text], widths=[5, 10, 20, width-35]) + '\n'
+
+        return report
 
 class NFLPlayer(pd.Series):
     '''Encapsulates a player in the roster
