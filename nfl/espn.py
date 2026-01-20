@@ -233,7 +233,7 @@ class NFLSourceESPN(NFLSource):
             if not result.get('drives'):
                 return None         # future games have no drive data
 
-            df = NFLPlaysFrame.make(game)
+            df = NFLPlaysFrame.make(nfl, game)
             n = 0
             for drv in result['drives']['previous']:
                 for play in drv['plays']:
@@ -258,6 +258,9 @@ class NFLSourceESPN(NFLSource):
                 n += 1
 
             if drive is not None:
+                if drive < 0:
+                    drive = df.iloc[-1]['drive']
+                    
                 df = df[df['drive']==drive]
 
             return df

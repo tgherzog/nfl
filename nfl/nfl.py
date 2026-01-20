@@ -289,7 +289,7 @@ class NFL():
                        in any way. Recognized values are 'user' (human-readable) and 'data' (codes only)
     '''
 
-    def __init__(self, year=None, season=None, engine=None, display='user'):
+    def __init__(self, year=None, season=None, engine=None):
         self.__version__ = __version__
         self.teams_  = {}
         self.divs_   = {}
@@ -303,10 +303,9 @@ class NFL():
         self.year = year
         self.season = season or 'reg'
         self.engine = engine
-        self.autoUpdate = True
-        self.netTouchdowns = False
-        self.display = display
-        self.debug = False
+
+        self.config = NFLSettings({'autoUpdate': False, 'netTouchdowns': False, 'display': None, 'debug': False})
+        self.config.display = NFLSettings({'names': True, 'plays': 'text'}, validator={'plays': {'text', 'normal', 'short'}})
 
         if not self.year:
             self.year = current_season()
@@ -643,7 +642,7 @@ class NFL():
         '''
 
         z = self.engine.scoreboard(self)
-        if z and self.autoUpdate and self.year == z.year and z.season:
+        if z and self.config.autoUpdate and self.year == z.year and z.season:
             for (k,v) in z.scoreboard.iterrows():
                 if v['status'] == 'Final' or v['status'] == 'Final/OT':
                     self.set(z.week, season=z.season, **{v['hteam']: v['hscore'], v['ateam']: v['ascore']})
@@ -1965,7 +1964,7 @@ class NFL():
 
         df = self.scenarios(teams, weeks, ties)
         df[pd.MultiIndex.from_product([['outcome'], teams])] = False
-        if self.debug:
+        if self.config.debug:
             df[('debug','tm')] = np.float32(0)
             df[('debug','cache')] = False
 
@@ -1986,7 +1985,7 @@ class NFL():
                         z = [('outcome',i) for i in tb.index[:spots]]
                         df.loc[k, z] = True
 
-                    if self.debug:
+                    if self.config.debug:
                         df.loc[k, ('debug','tm')] = pc()-st
                         df.loc[k, ('debug','cache')] = self.stats is None
 
@@ -2084,7 +2083,7 @@ class NFLDataFrame(pd.DataFrame):
 
     def __repr__(self):
 
-        if self.host and self.host.display == 'user':
+        if self.host and self.host.config.display.names:
             return self._reformat().__repr__()
 
         # else, default display
@@ -2092,7 +2091,7 @@ class NFLDataFrame(pd.DataFrame):
 
     def _repr_html(self):
 
-        if self.host and self.host.display == 'user':
+        if self.host and self.host.config.display.names:
             return self._reformat()._repr_html_()
 
         # else, default display
@@ -2127,7 +2126,7 @@ class NFLDataFrame(pd.DataFrame):
 
 class NFLPlaysFrame(NFLDataFrame):
 
-    _metadata = ['hteam', 'ateam']
+    _metadata = ['host', 'hteam', 'ateam']
     _columns = pd.Index(['team', 'drive', 'codes', 'period', 'clock', 'as', 'hs', 'down', 'loc', 'yds', 'type', 'desc'])
 
     @property
@@ -2135,17 +2134,24 @@ class NFLPlaysFrame(NFLDataFrame):
         return NFLPlaysFrame
 
     @staticmethod
-    def make(game):
+    def make(nfl, game):
         df = NFLPlaysFrame(columns=NFLPlaysFrame._columns)
+        df.host = nfl
         df.hteam = game['ht']
         df.ateam = game['at']
         return df
 
     def __repr__(self):
-        if len(set(NFLPlaysFrame._columns) - set(self.columns)) > 0:
+        disp = self.host.config.display.plays
+        if disp != 'text' or len(set(NFLPlaysFrame._columns) - set(self.columns)) > 0:
             # a slice or some other transformation we can't deal with
-            return super().__repr__()
+            if disp == 'normal' or len(self) < 10 or 'drive' not in self.columns or len(self['drive'].unique()) == 1:
+                return super().__repr__()
 
+            # return a shortened version
+            return self.iloc[-10:].__repr__()
+
+        # else, produce a text report
         if len(self) < 10 or len(self['drive'].unique()) == 1:
             z = self
         else:
@@ -2162,12 +2168,13 @@ class NFLPlaysFrame(NFLDataFrame):
             data = [i + ['']*(sz-len(i)) for i in data]
             s = ''
             for row in zip(*data):
+                if len(s) > 0:
+                    s += '\n'
+
                 for n in range(len(row)):
                     s += row[n].ljust(widths[n])
 
-                s += '\n'
-
-            return s
+            return s + '\n'
 
         report = ''
         width = 120
@@ -2175,13 +2182,21 @@ class NFLPlaysFrame(NFLDataFrame):
             misc = [str(k), str(row['drive'])]
             scores = ['{} {}'.format(self.ateam, self.hteam), '{:3} {:3}'.format(row['as'], row['hs'])]
             times  = ['{} {:<3} {}'.format(row['team'], row['loc'], row['down']), '{} Q{}'.format(row['clock'], row['period'])]
-            text = []
+            if row['type'] in ['Timeout', 'End of Game', 'End Period', 'End of Half']:
+                # type is redundant to description
+                text = []
+            else:
+                text = ['{} ({} yds)'.format(row['type'], row['yds'])]
+
             for line in row['desc'].split('\n'):
                 text += textwrap.wrap(line, width - 30)
 
-            report += columns([misc, scores, times, text], widths=[5, 10, 20, width-35]) + '\n'
+            if len(report) > 0:
+                report += '\n'
 
-        return report
+            report += columns([misc, scores, times, text], widths=[5, 10, 20, width-35])
+
+        return report.rstrip()
 
 class NFLPlayer(pd.Series):
     '''Encapsulates a player in the roster
@@ -2284,3 +2299,28 @@ class NFLRoster():
         '''Name and jersey for the 1st roster member with the given code
         '''
         return NFLPlayer(self[code].iloc[0], self.host)
+
+class NFLSettings(object):
+    '''A simple subclass that provides an interface for getting and setting
+       attributes, but prevents setting new attributes dynamically
+    '''
+
+    def __init__(self, config, validator=None):
+        '''Initialize the object with a dict of initial values
+        '''
+
+        super().__init__()
+        super().__setattr__('__dict__', config.copy())
+        super().__setattr__('validator', validator)
+
+    def __setattr__(self, key, value):
+        '''Set the value of an *existing* attribute
+        '''
+        if key not in self.__dict__:
+            raise AttributeError('{} is not an attribute'.format(key))
+
+        if type(self.validator) is dict and key in self.validator:
+            if value not in self.validator[key]:
+                raise ValueError('{} must be one of {}'.format(key, set(self.validator[key])))
+
+        self.__dict__[key] = value

@@ -623,7 +623,7 @@ class NFLTiebreakerController(object):
 
         rules.append('overall-netpoints')
 
-        if self.nfl.netTouchdowns:
+        if self.nfl.config.netTouchdowns:
             rules.append('net-touchdowns')
 
         return rules
