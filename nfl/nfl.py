@@ -356,6 +356,9 @@ class NFL():
         '''Save data to the specified Excel file
         '''
 
+        if self.games_ is None or len(self.games_) == 0:
+            raise RuntimeError('game data has not been updated or loaded. Call update or load')
+
         teams = pd.DataFrame(columns=['code','name','short','conf','div']).set_index('code')
         meta  = pd.DataFrame(columns=['key', 'value']).set_index('key')
 
@@ -575,6 +578,9 @@ class NFL():
 
         # engine returns a flat dataframe
         g = self.engine.games(self, season)
+        if len(g) == 0:
+            raise RuntimeError('No game schedule available for {}'.format(self.year))
+
         g['p'] = (g['hs'].isna()==False) & (g['as'].isna()==False)
 
         # convert nans to 0's so we can set column type to int
