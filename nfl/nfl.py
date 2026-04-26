@@ -268,8 +268,9 @@ class NFL():
        week      Current week number. This is automatically set by NFL.update()
                  and NFL.load(), and is used as a default argument by several functions
 
-       year      Current season. In theory this can be changed work with a previous
-                 season, although that's API independent and hasn't really been tested
+       year      Current season, i.e. calendar year at the beginning of the season.
+                 In theory this can be changed to work with a previous season, although that's
+                 API independent and hasn't really been thoroughly tested
 
        season    'pre', 'reg', or 'post' with a default of 'reg'. This is the default
                  value for season-specific functions like schedule, wlt and set/clear. 
@@ -325,6 +326,12 @@ class NFL():
 
         if i in self.teams_:
             return NFLTeam(i, self)
+
+    def __repr__(self):
+        return self.standings.__repr__()
+
+    def _repr_html_(self):
+        return self.standings._repr_html_()
 
     def load(self, path):
         ''' Loads data from the specified excel file

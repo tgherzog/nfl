@@ -30,10 +30,17 @@ def to_int_list(s, sep='-'):
     return list(map(lambda x: int(x), s.split(sep)))
 
 def current_season():
-    '''Return estimated current season based on the clock
+    '''Return estimated current season based on the clock. Current season
+       is the calendar year of beginning of the season
+
+       NFL seems to release the current season approx May 12-14th,
+       so we turnover on 5/15
     '''
     dt = datetime.now()
-    return dt.year if dt.month >= 4 else dt.year-1
+    if dt < datetime(year=dt.year, month=5, day=15):
+        return dt.year - 1
+
+    return dt.year
 
 vmap_ = {1: 'win', 0: 'loss', -1: 'tie'}
 def vmap(v):
