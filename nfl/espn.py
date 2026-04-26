@@ -61,7 +61,8 @@ class NFLSourceESPN(NFLSource):
                         team = requests.get(team_data['$ref']).json()
                         yield {
                             'key': team['abbreviation'],
-                            'team': team['displayName'],
+                            'name': team['name'],
+                            'fullname': team['displayName'],
                             'conf': conf_name,
                             'div': div_name
                         }
