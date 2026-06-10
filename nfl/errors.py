@@ -5,7 +5,7 @@ class NFLError(Exception):
 class NFLTiebreakerError(NFLError):
     pass
 
-    def __init__(self, msg, teams, rule):
+    def __init__(self, msg, teams, rules):
     	super().__init__(msg)
     	self.teams = teams
     	self.rules = rules
