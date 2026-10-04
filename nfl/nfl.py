@@ -199,6 +199,21 @@ class NFLConference():
         return z[z['div'].str.startswith(self.code)]
         return z
 
+    @property
+    def North(self):
+        return self.host(self.code+'-North')
+
+    @property
+    def East(self):
+        return self.host(self.code+'-East')
+
+    @property
+    def West(self):
+        return self.host(self.code+'-West')
+
+    @property
+    def South(self):
+        return self.host(self.code+'-South')
 
     def playoffs(self, count=7, controller=None):
         '''Current conference seeds, in order
