@@ -2094,6 +2094,10 @@ class NFLDataFrame(pd.DataFrame):
     _metadata = ['host']
     host = None
 
+    @property
+    def _constructor(self):
+        return NFLDataFrame
+
     def __repr__(self):
 
         if self.host and self.host.config.display.names:
