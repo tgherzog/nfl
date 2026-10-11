@@ -29,7 +29,8 @@ from .nfl import (
 	NFLScoreboard,
   NFLRoster,
   NFLPlayer,
-  NFLPlaysFrame
+  NFLPlaysFrame,
+  NFLSettings
 )
 
 # include these objects in the help docs

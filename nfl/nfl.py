@@ -7,6 +7,7 @@ from datetime import datetime
 from time import perf_counter as pc
 import numpy as np
 import pandas as pd
+from pprint import pformat
 
 from .utils import current_season, vmap, ivmap, set_dtypes, stack_copy, param_exc
 from .analytics import NFLTeamMatrix, NFLGameMatrix, NFLScenario, NFLScenarioFrame, NFLTiebreakerController
@@ -293,16 +294,19 @@ class NFL():
        engine    API engine. The ESPN engine is the most robust, but others are
                  available or could be written
 
-       autoUpdate      Determines whether NFLScoreboards automatically update the game database
-                       when games complete. Set to False if you don't want this
+       config.autoUpdate        Determines whether NFLScoreboards automatically update the game
+                                database when games complete. Set to False if you don't want this
 
-       netTouchdowns   Determines whether "net touchdowns" are included in tiebreaker determinations
-                       Fetching this data from the API is generally time consuming and rarely
-                       needed, so leave it set to False in most situations
+       config.netTouchdowns     Determines whether "net touchdowns" are included in tiebreaker
+                                determinations. Fetching this data from the API is generally time
+                                consuming and rarely needed, so leave it set to False in most situations
 
-       display         controls how certain dataframe display teams, either as bare codes or
-                       in a more human-readable form. This does not affect dataframe structure
-                       in any way. Recognized values are 'user' (human-readable) and 'data' (codes only)
+       config.display.names     controls how certain dataframes display teams, either as bare codes or
+                                in a more human-readable form. This does not affect dataframe structure
+                                in any way. Recognized values are 'user' (human-readable) and 'data' (codes only)
+
+       config.display.plays     One of 'normal', 'short', or 'text', the first two display as a typical DataFrame,
+                                while 'text' displays as a text report
     '''
 
     def __init__(self, year=None, season=None, engine=None):
@@ -2181,7 +2185,7 @@ class NFLPlaysFrame(NFLDataFrame):
                 return super().__repr__()
 
             # return a shortened version
-            return self.iloc[-10:].__repr__()
+            return pd.DataFrame(self).iloc[-10:].__repr__()
 
         # else, produce a text report
         if len(self) < 10 or len(self['drive'].unique()) == 1:
@@ -2337,6 +2341,20 @@ class NFLSettings(object):
        attributes, but prevents setting new attributes dynamically
     '''
 
+    def __repr__(self):
+
+        def printable(z):
+            z = z.__dict__.copy()
+            del(z['validator'])
+            return z
+
+        z = printable(self)
+        if 'display' in z:
+            z['display'] = printable(z['display'])
+
+        return pformat(z)
+
+
     def __init__(self, config, validator=None):
         '''Initialize the object with a dict of initial values
         '''
@@ -2350,6 +2368,9 @@ class NFLSettings(object):
         '''
         if key not in self.__dict__:
             raise AttributeError('{} is not an attribute'.format(key))
+
+        elif hasattr(self.__dict__[key], '__dict__'):
+            raise AttributeError('{} is an object'.format(key))
 
         if type(self.validator) is dict and key in self.validator:
             if value not in self.validator[key]:
