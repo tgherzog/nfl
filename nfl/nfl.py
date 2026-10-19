@@ -1453,7 +1453,7 @@ class NFL():
 
         if allGames:
             df = g.pivot_table(index='team', columns='opp', aggfunc='count', values='week', fill_value=0)
-            return NFLGameMatrix(teams=teams, data=df)
+            return NFLGameMatrix.make(teams=teams, data=df)
 
         wins = g[g['wlt']=='win'].pivot_table(index='team', columns='opp', aggfunc='count', values='week', fill_value=0)
         ties = g[g['wlt']=='tie'].pivot_table(index='team', columns='opp', aggfunc='count', values='week', fill_value=0)
@@ -1461,8 +1461,8 @@ class NFL():
         # Doing the compute this way ensures that all teams are present even if they
         # don't win or tie over the given range. However, the add operation changes
         # the resulting class, so we have recast the result
-        df = pd.DataFrame(NFLGameMatrix(teams)).add(wins, fill_value=0).add(ties*0.5, fill_value=0)
-        return NFLGameMatrix(teams=teams, data=df)
+        df = pd.DataFrame(NFLGameMatrix.make(teams)).add(wins, fill_value=0).add(ties*0.5, fill_value=0)
+        return NFLGameMatrix.make(teams=teams, data=df)
 
     def team_stats(self, team):
         '''Return stats for a single team

@@ -482,7 +482,8 @@ class NFLGameMatrix(pd.DataFrame):
     def _constructor(self):
         return NFLGameMatrix
 
-    def __init__(self, teams=None, data=None):
+    @staticmethod
+    def make(teams=None, data=None):
         '''Initialize the matrix with a list of teams. Note that division and conference
            codes are *not* supported, so you must pass explicit list-likes of team codes
            in the order you want them defined
@@ -495,19 +496,20 @@ class NFLGameMatrix(pd.DataFrame):
             raise ValueError('NFLGameMatrix must be initialized with a team list and/or data')
         elif data is None and teams is not None:
             t = list(teams)
-            super().__init__(0.0, columns=t, index=t, dtype='float32')
+            df = NFLGameMatrix(0.0, columns=t, index=t, dtype='float32')
         elif teams is None and data is not None:
-            super().__init__(data=data, dtype='float32', copy=True)
+            df = NFLGameMatrix(data=data, dtype='float32', copy=True)
         else:
             t = list(teams)
-            super().__init__(data=data, columns=t, index=t, dtype='float32', copy=True)
+            df = NFLGameMatrix(data=data, columns=t, index=t, dtype='float32', copy=True)
 
-        self.columns.name = 'opp'
-        self.index.name = 'name'
+        df.columns.name = 'opp'
+        df.index.name = 'name'
 
         # set diagonals to NaN
-        z = range(len(self))
-        self.iloc[(z, z)] = np.nan
+        z = range(len(df))
+        df.iloc[(z, z)] = np.nan
+        return df
 
     def games(self):
         '''Transform the matrix into a count of games between each combination of teams
