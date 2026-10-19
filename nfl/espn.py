@@ -4,6 +4,7 @@ from dateutil import tz
 import requests
 import numpy as np
 import pandas as pd
+import logging
 
 from .source import NFLSource
 from .nfl import NFLScoreboard, NFLRoster, NFLDataFrame, NFLPlaysFrame
@@ -59,9 +60,11 @@ class NFLSourceESPN(NFLSource):
                     (conf_name,div_name) = div['name'].split(maxsplit=1)
                     for team_data in requests.get(div['teams']['$ref']).json()['items']:
                         team = requests.get(team_data['$ref']).json()
+                        # logging.info('Load: {}'.format(team_data['$ref']))
                         yield {
+                            # for some years between the Redskins and Commanders, WSH had no defined name field
                             'key': team['abbreviation'],
-                            'name': team['name'],
+                            'name': team.get('name', team['displayName']),
                             'fullname': team['displayName'],
                             'conf': conf_name,
                             'div': div_name
