@@ -761,6 +761,9 @@ class NFL():
             else:
                 gd.loc[key, ('misc','match')] = 'league'
 
+        sch = self.schedule(weeks=src.week, by='team')
+        gd.footer = 'Byes: ' + ', '.join(sch[sch['opp'].isna()].index)
+
         return gd
 
     @property
@@ -2065,6 +2068,9 @@ class NFLScoreboard():
         self.scoreboard = NFLDataFrame(scoreboard)
         self.scoreboard.host = nfl
 
+        sch = nfl.schedule(weeks=week, by='team')
+        self.scoreboard.footer = 'Byes: ' + ', '.join(sch[sch['opp'].isna()].index)
+
     def __repr__(self):
         if isinstance(self.scoreboard, pd.DataFrame):
             return 'Week {}\n'.format(self.week) + self.scoreboard.drop('state',axis=1).__repr__()
@@ -2110,8 +2116,9 @@ class NFLDataFrame(pd.DataFrame):
         teams ('data' and 'user' are currently recognized values)
     '''
 
-    _metadata = ['host']
+    _metadata = ['host', 'footer']
     host = None
+    footer = ''
 
     @property
     def _constructor(self):
@@ -2119,19 +2126,31 @@ class NFLDataFrame(pd.DataFrame):
 
     def __repr__(self):
 
+        if self.footer:
+            # not bothering with embeeded html, so beware
+            footer = '\n' + self.footer
+        else:
+            footer = ''
+
         if self.host and self.host.config.display.names:
-            return self._reformat().__repr__()
+            return self._reformat().__repr__() + footer
 
         # else, default display
-        return super().__repr__()
+        return super().__repr__() + footer
 
     def _repr_html(self):
 
+        if self.footer:
+            # not bothering with embeeded html, so beware
+            footer = '<p>' + self.footer + '</p>'
+        else:
+            footer = ''
+
         if self.host and self.host.config.display.names:
-            return self._reformat()._repr_html_()
+            return self._reformat()._repr_html_() + footer
 
         # else, default display
-        return super()._repr_html_()        
+        return super()._repr_html_() + footer
 
     def _reformat(self):
         
@@ -2215,9 +2234,10 @@ class NFLPlaysFrame(NFLDataFrame):
         report = ''
         width = 120
         for k,row in z.iterrows():
-            misc = [str(k), str(row['drive'])]
+            misc   = ['({}){}'.format(row['drive'], k)]
             scores = ['{} {}'.format(self.ateam, self.hteam), '{:3} {:3}'.format(row['as'], row['hs'])]
-            times  = ['{} {:<3} {}'.format(row['team'], row['loc'], row['down']), '{} Q{}'.format(row['clock'], row['period'])]
+            gt     = ['({}){}'.format(row['period'], row['clock'])]
+            times  = [row['down'], '{} {:<3}'.format(row['team'], row['loc'])]
             if row['type'] in ['Timeout', 'End of Game', 'End Period', 'End of Half']:
                 # type is redundant to description
                 text = []
@@ -2230,7 +2250,7 @@ class NFLPlaysFrame(NFLDataFrame):
             if len(report) > 0:
                 report += '\n'
 
-            report += columns([misc, scores, times, text], widths=[5, 10, 20, width-35])
+            report += columns([misc, scores, gt, times, text], widths=[9, 10, 9, 12, width-35])
 
         return report.rstrip()
 
