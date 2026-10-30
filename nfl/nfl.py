@@ -293,20 +293,6 @@ class NFL():
 
        engine    API engine. The ESPN engine is the most robust, but others are
                  available or could be written
-
-       config.autoUpdate        Determines whether NFLScoreboards automatically update the game
-                                database when games complete. Set to False if you don't want this
-
-       config.netTouchdowns     Determines whether "net touchdowns" are included in tiebreaker
-                                determinations. Fetching this data from the API is generally time
-                                consuming and rarely needed, so leave it set to False in most situations
-
-       config.display.names     controls how certain dataframes display teams, either as bare codes or
-                                in a more human-readable form. This does not affect dataframe structure
-                                in any way. Recognized values are 'user' (human-readable) and 'data' (codes only)
-
-       config.display.plays     One of 'normal', 'short', or 'text', the first two display as a typical DataFrame,
-                                while 'text' displays as a text report
     '''
 
     def __init__(self, year=None, season=None, engine=None):
@@ -2359,6 +2345,22 @@ class NFLRoster():
 class NFLSettings(object):
     '''A simple subclass that provides an interface for getting and setting
        attributes, but prevents setting new attributes dynamically
+
+       autoUpdate       Determines whether NFLScoreboards automatically update the game
+                        database when games complete. Set to False if you don't want this
+
+       netTouchdowns    Determines whether "net touchdowns" are included in tiebreaker
+                        determinations. Fetching this data from the API is generally time
+                        consuming and rarely needed, so leave it set to False in most situations
+
+       debug            Used in various places to add debugging info to outputs 
+
+       display.names    controls how certain dataframes display teams, either as bare codes or
+                        in a more human-readable form. This does not affect dataframe structure
+                        in any way. Recognized values are 'user' (human-readable) and 'data' (codes only)
+
+       display.plays    One of 'normal', 'short', or 'text', the first two display as a typical DataFrame,
+                        while 'text' displays as a text report
     '''
 
     def __repr__(self):
